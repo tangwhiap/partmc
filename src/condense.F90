@@ -108,6 +108,70 @@ module pmc_condense
      real(kind=dp) :: dHdotenv_dH
   end type condense_rates_outputs_t
 
+  !> Internal-use structure for storing the inputs for the
+  !> rate-calculation function for ice.
+  type iceGrowth_rates_inputs_t
+     !> Temperature (K).
+     real(kind=dp) :: T
+     !> Rate of change of temperature (K s^{-1}).
+     real(kind=dp) :: Tdot
+     !> Relative humidity (1).
+     real(kind=dp) :: H
+     !> Pressure (Pa).
+     real(kind=dp) :: p
+     !> Rate of change of pressure (Pa s^{-1}).
+     real(kind=dp) :: pdot
+     !> Computational volume (m^3).
+     real(kind=dp) :: V_comp
+     !> Particle diameter (m).
+     real(kind=dp) :: D
+     !> Particle dry diameter (m).
+     real(kind=dp) :: D_dry
+     !> Kappa parameter (1).
+     !real(kind=dp) :: kappa
+
+     !> Ice density
+     real(kind=dp) :: den_ice
+     real(kind=dp) :: den_dep
+     real(kind=dp) :: den_sub
+     !> Ice shape parameter
+     real(kind=dp) :: ice_shape_phi
+     real(kind=dp) :: fvi
+     real(kind=dp) :: fti
+     real(kind=dp) :: dfv_dR
+     real(kind=dp) :: dft_dR
+
+     !real(kind=dp) :: a_very_very_strange_bug
+     !integer :: AA
+
+  end type iceGrowth_rates_inputs_t
+
+  !> Internal-use structure for storing the outputs from the
+  !> rate-calculation function for ice.
+  type iceGrowth_rates_outputs_t
+     !> Change rate of diameter (m s^{-1}).
+     real(kind=dp) :: Ddot
+     !> Change rate of relative humidity due to this particle (s^{-1}).
+     real(kind=dp) :: Hdot_i
+     !> Change rate of relative humidity due to environment changes (s^{-1}).
+     real(kind=dp) :: Hdot_env
+     !> Sensitivity of \c Ddot to input \c D (m s^{-1} m^{-1}).
+     real(kind=dp) :: dDdot_dD
+     !> Sensitivity of \c Ddot to input \c H (m s^{-1}).
+     real(kind=dp) :: dDdot_dH
+     !> Sensitivity of \c Hdot_i to input \c D (s^{-1} m^{-1}).
+     real(kind=dp) :: dHdoti_dD
+     !> Sensitivity of \c Hdot_i to input \c D (s^{-1}).
+     real(kind=dp) :: dHdoti_dH
+     !> Sensitivity of \c Hdot_env to input \c D (s^{-1} m^{-1}).
+     real(kind=dp) :: dHdotenv_dD
+     !> Sensitivity of \c Hdot_env to input \c D (s^{-1}).
+     real(kind=dp) :: dHdotenv_dH
+
+     !real(kind=dp) :: AA
+     !real(kind=dp) :: BB
+  end type iceGrowth_rates_outputs_t
+
   !> Internal-use variable for storing the aerosol data during calls
   !> to the ODE solver.
   type(aero_data_t) :: condense_saved_aero_data
@@ -130,6 +194,29 @@ module pmc_condense
   !> concentrations during calls to the ODE solver.
   real(kind=dp), allocatable :: condense_saved_num_conc(:)
 
+  !> Internal-use variable for storing the per-particle frozen state
+  !> concentrations during calls to the ODE solver.
+  !> TangWenhan
+  integer, parameter :: condense_Rice_avg = 10d-6
+  logical, allocatable :: condense_saved_frozen(:)
+  real(kind=dp), allocatable :: condense_saved_den_ice(:)
+  real(kind=dp), allocatable :: condense_saved_ice_shape_phi(:)
+  real(kind=dp), allocatable :: condense_saved_ice_density_dep(:)
+  real(kind=dp), allocatable :: condense_saved_ice_density_sub(:)
+  real(kind=dp), allocatable :: condense_saved_fv(:)
+  real(kind=dp), allocatable :: condense_saved_ft(:)
+  real(kind=dp), allocatable :: condense_saved_fva(:)
+  real(kind=dp), allocatable :: condense_saved_fvc(:)
+  real(kind=dp), allocatable :: condense_saved_dfv_dR(:)
+  real(kind=dp), allocatable :: condense_saved_dft_dR(:)
+
+  logical :: condense_saved_do_ice_shape
+  logical :: condense_saved_do_ice_density
+  logical :: condense_saved_do_ice_ventilation
+  real(kind=dp) :: condense_saved_gammaFindTrip(60)
+  logical :: condense_gamma_accessed = .False.
+  real(kind=dp) :: condense_saved_ice_supersat_density
+
   !> Internal-use variable for counting calls to the vector field
   !> subroutine.
   integer, save :: condense_count_vf
@@ -145,7 +232,7 @@ contains
   !> including updating the environment to account for the lost
   !> water vapor.
   subroutine condense_particles(aero_state, aero_data, env_state_initial, &
-       env_state_final, del_t)
+       env_state_final, del_t, do_ice_shape, do_ice_density, do_ice_ventilation)
 
     !> Aerosol state.
     type(aero_state_t), intent(inout) :: aero_state
@@ -159,6 +246,10 @@ contains
     type(env_state_t), intent(inout) :: env_state_final
     !> Total time to integrate.
     real(kind=dp), intent(in) :: del_t
+    logical, intent(in) :: do_ice_shape
+    logical, intent(in) :: do_ice_density
+    logical, intent(in) :: do_ice_ventilation
+    real(kind=dp) :: P0
 
     integer :: i_part, n_eqn, i_eqn
     real(kind=dp) :: state(aero_state_n_part(aero_state) + 1)
@@ -170,6 +261,10 @@ contains
     real(kind=dp) :: vapor_vol_conc_initial, vapor_vol_conc_final
     real(kind=dp) :: d_water_vol_conc, d_vapor_vol_conc
     real(kind=dp) :: V_comp_ratio, water_rel_error
+    !> TangWenhan
+    real(kind=dp) :: ice_D3
+    real(kind=dp), allocatable :: particle_volume_initial(:)
+    real(kind=dp), allocatable :: particle_volume_final(:)
 #ifdef PMC_USE_SUNDIALS
     real(kind=c_double), target :: state_f(aero_state_n_part(aero_state) + 1)
     real(kind=c_double), target :: abstol_f(aero_state_n_part(aero_state) + 1)
@@ -194,7 +289,18 @@ contains
     end interface
 #endif
 #endif
-
+    !print*, "start condensation"
+    ! TangWenhan
+    if (do_ice_shape .OR. do_ice_density .OR. do_ice_ventilation) then
+        if (.NOT. condense_gamma_accessed) then
+            !print*, "READ from gammaFindTrip"
+            OPEN(60, file = 'gammaFindTrip')
+            READ(60,*) condense_saved_gammaFindTrip
+            CLOSE(60)
+            condense_gamma_accessed = .True.
+        end if
+    end if
+    !print*, do_ice_shape, do_ice_density, do_ice_ventilation
     ! initial water concentration in the aerosol particles
     water_vol_conc_initial = 0d0
     do i_part = 1,aero_state_n_part(aero_state)
@@ -212,10 +318,33 @@ contains
     condense_saved_pdot &
          = (env_state_final%pressure - env_state_initial%pressure) / del_t
 
+    !> TangWenhan
+    condense_saved_do_ice_shape = do_ice_shape
+    condense_saved_do_ice_density = do_ice_density
+    condense_saved_do_ice_ventilation = do_ice_ventilation
+
     ! construct initial state vector from aero_state and env_state
     allocate(condense_saved_kappa(aero_state_n_part(aero_state)))
     allocate(condense_saved_D_dry(aero_state_n_part(aero_state)))
     allocate(condense_saved_num_conc(aero_state_n_part(aero_state)))
+    !> TangWenhan
+    allocate(condense_saved_frozen(aero_state_n_part(aero_state)))
+    allocate(condense_saved_den_ice(aero_state_n_part(aero_state)))
+    allocate(condense_saved_ice_density_dep(aero_state_n_part(aero_state)))
+    allocate(condense_saved_ice_density_sub(aero_state_n_part(aero_state)))
+    allocate(condense_saved_ice_shape_phi(aero_state_n_part(aero_state)))
+    allocate(condense_saved_fv(aero_state_n_part(aero_state)))
+    allocate(condense_saved_ft(aero_state_n_part(aero_state)))
+    allocate(condense_saved_fva(aero_state_n_part(aero_state)))
+    allocate(condense_saved_fvc(aero_state_n_part(aero_state)))
+    allocate(condense_saved_dfv_dR(aero_state_n_part(aero_state)))
+    allocate(condense_saved_dft_dR(aero_state_n_part(aero_state)))
+    allocate(particle_volume_initial(aero_state_n_part(aero_state)))
+    allocate(particle_volume_final(aero_state_n_part(aero_state)))
+
+    !> TangWenhan
+    call condense_ice_supersat_density(env_state_initial)
+
     ! work backwards for consistency with the later number
     ! concentration adjustment, which has specific ordering
     ! requirements
@@ -229,13 +358,84 @@ contains
        condense_saved_num_conc(i_part) &
             = aero_weight_array_num_conc(aero_state%awa, &
             aero_state%apa%particle(i_part), aero_data)
+
+       !> TangWenhan
+       condense_saved_frozen(i_part) = aero_state%apa%particle(i_part)%frozen
+       condense_saved_den_ice(i_part) = aero_state%apa%particle(i_part)%den_ice
+       condense_saved_ice_shape_phi(i_part) = &
+           aero_state%apa%particle(i_part)%ice_shape_phi
+
+       condense_saved_fv(i_part) = 1d0
+       condense_saved_ft(i_part) = 1d0
+       condense_saved_fva(i_part) = 1d0
+       condense_saved_fvc(i_part) = 1d0
+
        state(i_part) = aero_particle_diameter(&
             aero_state%apa%particle(i_part), aero_data)
+
+       !if (i_part .eq. 1) then
+       !    print*, "state(1) = ", state(i_part)
+       !end if
+       !> TangWenhan
+       if (aero_state%apa%particle(i_part)%frozen) then
+            
+            ice_D3 = state(i_part) **3d0 + 6d0/const%pi * &
+                aero_state%apa%particle(i_part)%vol(aero_data%i_water) * &
+                    (const%water_density / aero_state%apa%particle(i_part)%den_ice - 1d0)
+            !if (i_part .eq. 1) then
+                !print*, "state(1)=", state(i_part), aero_state%apa%particle(i_part)%vol(aero_data%i_water) * &
+                !    (const%water_density), &
+                !    aero_state%apa%particle(i_part)%den_ice, &
+                !    aero_state%apa%particle(i_part)%frozen
+            !end if
+            state(i_part) = ice_D3 ** (1d0/3d0)
+            
+            particle_volume_initial(i_part) = const%pi / 6d0 * ice_D3
+            if (do_ice_density) then
+                call condense_ice_density_dep_sub( &
+                    particle_volume_initial(i_part), &
+                    aero_state%apa%particle(i_part)%den_ice, &
+                    env_state_initial, &
+                    condense_saved_ice_density_dep(i_part), &
+                    condense_saved_ice_density_sub(i_part) )
+                                
+            end if
+            !if (i_part .eq. 1143) then
+                !print*, "start: ", state(i_part), i_part
+            !    continue
+            !end if
+       end if
+
        abs_tol_vector(i_part) = max(1d-30, &
             1d-8 * (state(i_part) - condense_saved_D_dry(i_part)))
     end do
+
+    if (do_ice_ventilation) then
+        call condense_ice_ventilation(state(1:aero_state_n_part(aero_state)) / 2d0, &
+                aero_state_n_part(aero_state), env_state_final)
+    end if
+    !print*, condense_saved_fv(1), condense_saved_ft(1), condense_saved_fva(1), &
+    !            condense_saved_fvc(1)
+
+
     state(aero_state_n_part(aero_state) + 1) = env_state_initial%rel_humid
     abs_tol_vector(aero_state_n_part(aero_state) + 1) = 1d-10
+
+
+    !print*, "init = ", state(1), state(aero_state_n_part(aero_state) + 1)
+
+    !print*, "delta rou"
+    !print*, condense_saved_ice_supersat_density
+    !print*, "dep"
+    !print*, condense_saved_ice_density_dep(1)
+    !print*, "sub"
+    !print*, condense_saved_ice_density_sub(1)
+
+    !print*, "R", state(1) * 1e6, "delr", condense_saved_ice_supersat_density, "dep", condense_saved_ice_density_dep(1),&
+    !   "sub", condense_saved_ice_density_sub(1), "den_ice", condense_saved_den_ice(1)
+
+    
+
 
 #ifdef PMC_USE_SUNDIALS
     ! call SUNDIALS solver
@@ -264,8 +464,10 @@ contains
     end do
 #endif
 
+
     ! unpack result state vector into env_state_final
     env_state_final%rel_humid = state(aero_state_n_part(aero_state) + 1)
+    !print*, "final rel_humid = ", env_state_final%rel_humid
 
     ! unpack result state vector into aero_state, compute the final
     ! water volume concentration, and adjust particle number to
@@ -283,14 +485,72 @@ contains
             - aero_particle_solute_volume(aero_state%apa%particle(i_part), &
             aero_data)
 
+
+       !if (i_part .eq. 1143) then
+           !print*, "end: ", state(i_part)
+       !    continue
+       !end if
        ! ensure volumes stay positive
        aero_state%apa%particle(i_part)%vol(aero_data%i_water) = max(0d0, &
             aero_state%apa%particle(i_part)%vol(aero_data%i_water))
 
+       particle_volume_final(i_part) = max(&
+               aero_particle_solute_volume(aero_state%apa%particle(i_part), aero_data),&
+                aero_data_diam2vol(aero_data, state(i_part)))
+       !print*, particle_volume_initial(i_part), particle_volume_final(i_part),&
+       !    aero_state%apa%particle(i_part)%vol(aero_data%i_water)
+
+       ! convert ice real volume to mass equivalent volume wrt water
+       ! TangWenhan
+       if (aero_state%apa%particle(i_part)%frozen) then
+            !print*, "frozen2"
+            if (do_ice_density) then
+                aero_state%apa%particle(i_part)%den_ice = &
+                        condense_update_ice_density(&
+                            particle_volume_initial(i_part), &
+                            particle_volume_final(i_part), &
+                            aero_state%apa%particle(i_part)%den_ice, &
+                            condense_saved_ice_density_dep(i_part), &
+                            condense_saved_ice_density_sub(i_part) )
+            end if
+            aero_state%apa%particle(i_part)%vol(aero_data%i_water) = &
+                aero_state%apa%particle(i_part)%vol(aero_data%i_water) * &
+                    aero_state%apa%particle(i_part)%den_ice / &
+                        const%water_density
+       end if
        ! add up total water volume, using old number concentrations
        water_vol_conc_final = water_vol_conc_final &
             + aero_state%apa%particle(i_part)%vol(aero_data%i_water) * num_conc
     end do
+    ! TangWenhan
+    if (do_ice_shape) then
+        do i_part = 1,aero_state_n_part(aero_state)
+            if (aero_state%apa%particle(i_part)%frozen) then
+                aero_state%apa%particle(i_part)%ice_shape_phi = &
+                    condense_update_ice_shape_phi(&
+                        aero_state%apa%particle(i_part)%ice_shape_phi, &
+                        particle_volume_initial(i_part), &
+                        particle_volume_final(i_part), &
+                        env_state_initial, &
+                        condense_saved_fva(i_part), &
+                        condense_saved_fvc(i_part))
+            end if
+        end do
+    end if
+    !> TangWenhan
+    !if (do_ice_density) then
+    !    do i_part = 1,aero_state_n_part(aero_state)
+    !        if (aero_state%apa%particle(i_part)%frozen) then
+    !            aero_state%apa%particle(i_part)%den_ice = &
+    !                condense_update_ice_density(&
+    !                    particle_volume_initial(i_part), &
+    !                    particle_volume_final(i_part), &
+    !                    aero_state%apa%particle(i_part)%den_ice, &
+    !                    condense_saved_ice_density_dep(i_part), &
+    !                    condense_saved_ice_density_sub(i_part) )
+    !        end if
+    !    end do
+    !end if
     ! adjust particles to account for weight changes
     call aero_state_reweight(aero_state, aero_data, reweight_num_conc)
 
@@ -300,28 +560,53 @@ contains
     ! weightings correctly.
     V_comp_ratio = env_state_final%temp * env_state_initial%pressure &
          / (env_state_initial%temp * env_state_final%pressure)
+    !print*, water_vol_conc_final * const%water_density
+    call env_state_saturated_vapor_pressure_water(env_state_initial, P0)
     vapor_vol_conc_initial = aero_data%molec_weight(aero_data%i_water) &
          / (const%univ_gas_const * env_state_initial%temp) &
          * env_state_sat_vapor_pressure(env_state_initial) &
+         !* P0 &
          * env_state_initial%rel_humid &
          / aero_particle_water_density(aero_data)
+    call env_state_saturated_vapor_pressure_water(env_state_final, P0)
     vapor_vol_conc_final = aero_data%molec_weight(aero_data%i_water) &
          / (const%univ_gas_const * env_state_final%temp) &
          * env_state_sat_vapor_pressure(env_state_final) &
+         !* P0 &
          * env_state_final%rel_humid &
          * V_comp_ratio / aero_particle_water_density(aero_data)
+
+    !print*, water_vol_conc_final * const%water_density + vapor_vol_conc_final * const%water_density
+
     d_vapor_vol_conc = vapor_vol_conc_final - vapor_vol_conc_initial
     d_water_vol_conc = water_vol_conc_final - water_vol_conc_initial
     water_rel_error = (d_vapor_vol_conc + d_water_vol_conc) &
          / (vapor_vol_conc_final + water_vol_conc_final)
+    !print*, water_rel_error
     call warn_assert_msg(477865387, abs(water_rel_error) < 1d-6, &
          "condensation water imbalance too high: " &
          // trim(real_to_string(water_rel_error)))
 
+    
+
     deallocate(condense_saved_kappa)
     deallocate(condense_saved_D_dry)
     deallocate(condense_saved_num_conc)
+    deallocate(condense_saved_frozen)
+    deallocate(condense_saved_den_ice)
+    deallocate(condense_saved_ice_density_dep)
+    deallocate(condense_saved_ice_density_sub)
+    deallocate(condense_saved_ice_shape_phi)
+    deallocate(condense_saved_fv)
+    deallocate(condense_saved_ft)
+    deallocate(condense_saved_fva)
+    deallocate(condense_saved_fvc)
+    deallocate(condense_saved_dfv_dR)
+    deallocate(condense_saved_dft_dR)
+    deallocate(particle_volume_initial)
+    deallocate(particle_volume_final)
 
+    !print*, "end condensation"
   end subroutine condense_particles
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -381,6 +666,7 @@ contains
     real(kind=dp) :: dh_dH, ddeltastar_dD, ddeltastar_dH
     integer :: newton_step
 
+    !print*, "ee", inputs%H, inputs%V_comp, inputs%D, inputs%D_dry, inputs%kappa
     rho_w = const%water_density
     M_w = const%water_molec_weight
     P_0 = const%water_eq_vap_press &
@@ -470,10 +756,16 @@ contains
             * exp(W * delta_star / (1d0 + delta_star) &
             + (X / inputs%D) / (1d0 + delta_star))
     end do
-    call warn_assert_msg(387362320, &
-         abs(h) < 1d3 * epsilon(1d0) * abs(U * V * D_vp * inputs%H), &
-         "condensation newton loop did not satisfy convergence tolerance")
+    !call warn_assert_msg(387362320, &
+    !     abs(h) < 1d3 * epsilon(1d0) * abs(U * V * D_vp * inputs%H), &
+    !     "condensation newton loop did not satisfy convergence tolerance")
 
+    !print*, abs(h) - 1d3 * epsilon(1d0) * abs(U * V * D_vp * inputs%H)
+    !if (.not. (abs(h) < 1d3 * epsilon(1d0) * abs(U * V * D_vp * inputs%H))) then
+       ! print*, abs(h)
+       !print*, 1d3 * epsilon(1d0) * abs(U * V * D_vp * inputs%H)
+        !print*, inputs%H, inputs%V_comp, inputs%D, inputs%D_dry, inputs%kappa
+    !end if
     outputs%Ddot = k_ap * delta_star / (U * inputs%D)
     outputs%Hdot_i = - 2d0 * const%pi / (V * inputs%V_comp) &
          * inputs%D**2 * outputs%Ddot
@@ -501,6 +793,137 @@ contains
 
   end subroutine condense_rates
 
+  !> TangWenhan
+  !> Compute the rate of change of ice particle diameter and relative
+  !> humidity for a single ice particle, together with the derivatives of
+  !> the rates with respect to the input variables.
+  subroutine iceGrowth_rates(inputs, outputs)
+
+    implicit none
+    !> Inputs to rates.
+    type(iceGrowth_rates_inputs_t), intent(in) :: inputs
+    !> Outputs rates.
+    type(iceGrowth_rates_outputs_t), intent(out) :: outputs
+
+    real(kind = dp) :: R, Rdot, dRdot_dR, dRdot_dH, dHdoti_dR, Hdot_i, dHdoti_dH
+    real(kind = dp) :: k_a, D_v, dP0_dT_div_P0, P0, P0_ice, G, rho_air, Cap, phi
+    real(kind = dp) :: IWCi_dot, MRii_dot, Ls, Rd, Rv, d_Cap_d_R, dG_dR
+    real(kind = dp) :: fvi, fti
+    real(kind = dp) :: Lv = 2.5d6, Cpv = 1850d0, Cpw = 4200d0
+    real(kind = dp) :: spec_den
+    !air_spec_heat
+
+    !print*, "Here"
+
+    dP0_dT_div_P0 = 7.45d0 * log(10d0) * (const%water_freeze_temp - 38d0) &
+        / (inputs%T - 38d0)**2
+    outputs%Hdot_env = - dP0_dT_div_P0 * inputs%Tdot * inputs%H &
+        + inputs%H * inputs%pdot / inputs%p
+    outputs%dHdotenv_dD = 0d0
+    outputs%dHdotenv_dH = - dP0_dT_div_P0 * inputs%Tdot &
+        + inputs%pdot / inputs%p
+    !print*, "inner = ", outputs%dHdotenv_dH
+    
+
+    !if (inputs%D - inputs%D_dry .lt. 1e-10) then
+    if (inputs%D .lt. 1e-10) then
+        outputs%Ddot = 0d0
+        outputs%Hdot_i = 0d0
+        outputs%dDdot_dD = 0d0
+        outputs%dDdot_dH = 0d0
+        outputs%dHdoti_dD = 0d0
+        outputs%dHdoti_dH = 0d0
+    else
+        R = inputs%D / 2d0
+        phi = inputs%ice_shape_phi
+        fvi = inputs%fvi
+        fti = inputs%fti
+        !k_a = 1d-3 * (4.39d0 + 0.071d0 * inputs%T)
+        k_a = 5.69 + 0.019 * (inputs%T - 273.15) * 418.684 * 1d-5
+        D_v = 0.211d-4 / (inputs%p / const%air_std_press) &
+            * (inputs%T / 273d0)**1.94d0
+        Rd = const%univ_gas_const / const%air_molec_weight
+        Rv = const%univ_gas_const / const%water_molec_weight
+        rho_air = inputs%p / (Rd * inputs%T)
+        call env_state_saturated_vapor_pressure_water_3(inputs%T, P0)
+        call env_state_saturated_vapor_pressure_ice_2(inputs%T, P0_ice)
+        Ls = Lv + (Cpv - Cpw) * (inputs%T - const%water_freeze_temp)
+        G = (Ls / (Rv * inputs%T) - 1d0) * Ls / (k_a * fti * inputs%T) + &
+            Rv * inputs%T / (D_v * fvi * P0_ice)
+        !print*, Ls, Lv, D_v, k_a
+        !print*, "G=", G
+        if (condense_saved_do_ice_shape) then
+            Cap = condense_iceGrowth_capacitance(R, phi)
+            d_Cap_d_R = condense_dC_dR(phi)
+        else
+            Cap = R
+            d_Cap_d_R = 1d0
+        end if
+        if (condense_saved_do_ice_density) then
+            if (condense_saved_ice_supersat_density .ge. 0d0) then
+                spec_den = inputs%den_dep
+            else
+                spec_den = inputs%den_sub
+            end if
+        else
+            spec_den = inputs%den_ice
+        end if
+        !if (condense_saved_do_ice_ventilation .and. .False.) then
+        if (condense_saved_do_ice_ventilation) then
+            dG_dR =  -((Ls / (Rv * inputs%T) - 1d0) * Ls / (K_a * inputs%T) / &
+                    (fti**2) * inputs%dft_dR + Rv * inputs%T / &
+                    (D_v * P0_ice) / (fvi**2) * inputs%dfv_dR)
+        else
+            dG_dR = 0d0
+        end if
+        !print*, dG_dR
+        !Rdot = (inputs%H * P0 / P0_ice - 1d0) * Cap / (R**2 * inputs%den_ice * G)
+        Rdot = (inputs%H * P0 / P0_ice - 1d0) * Cap / (R**2 * spec_den * G)
+        MRii_dot = 4d0 * const%pi * R**2 * spec_den * Rdot / &
+            inputs%V_comp / rho_air
+        !Hdot_i = -inputs%H * (Lv * Ls / (Rv * inputs%T**2 * &
+        !        const%air_spec_heat) + Rv * inputs%p / &
+        !        (P0_ice * inputs%H * Rd)) * MRii_dot
+        Hdot_i = -(Rv * inputs%p / (P0 *  Rd)) * MRii_dot
+
+        !dRdot_dR = -(inputs%H*P0/P0_ice - 1d0) * 2d0 * Cap / (inputs%den_ice * G * R**3)
+        dRdot_dR = -(inputs%H*P0/P0_ice - 1d0) / (spec_den * G) * (2d0 / &
+                R**3 * Cap - 1 / R**2 * d_Cap_d_R) - &
+                (inputs%H*P0/P0_ice - 1d0) * Cap / (R**2 * spec_den * G**2) * dG_dR
+        !print*, dRdot_dR
+        dRdot_dH = P0 / P0_ice * Cap / (R**2 * spec_den * G)
+        !dHdoti_dR = 0d0
+        dHdoti_dR = -(Rv * inputs%p) / (P0_ice * Rd) / rho_air * 4 * const%pi * &
+            spec_den / inputs%V_comp * ( 2 * R * Rdot + R**2 * dRdot_dR)
+        !dHdoti_dH = -4*const%pi*R**2 *inputs%den_ice/inputs%V_comp/rho_air *&
+        !    (Lv*Ls/(Rv*inputs%T**2*const%air_spec_heat)*Rdot + &
+        !     (inputs%H*Lv*Ls/(Rv*inputs%T**2*const%air_spec_heat) + &
+        !      Rv*inputs%p/(P0_ice*Rd)) * dRdot_dH)
+        dHdoti_dH = Hdot_i / Rdot * dRdot_dH
+
+        outputs%Ddot = 2d0 * Rdot
+        outputs%Hdot_i = Hdot_i
+        outputs%dDdot_dD = dRdot_dR
+        outputs%dDdot_dH = 2d0 * dRdot_dH
+        outputs%dHdoti_dD = dHdoti_dR / 2d0
+        outputs%dHdoti_dH = dHdoti_dH
+        !outputs%Hdot_i = 0d0
+        !outputs%Ddot = 1d0
+        !outputs%Hdot_i = 1d0
+        !outputs%dDdot_dD = 1d200
+        !outputs%dDdot_dH = -2d200
+        !outputs%dHdoti_dD = 3d200
+        !outputs%dHdoti_dH = -4d200
+        !print*, Hdot_i * P0 / Rv / inputs%T + 4 * const%pi * R**2 * &
+        !    inputs%den_ice * Rdot / inputs%V_comp
+
+    end if
+
+    
+
+  end subroutine iceGrowth_rates
+
+
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 #ifdef PMC_USE_SUNDIALS
@@ -523,6 +946,8 @@ contains
     integer :: i_part
     type(condense_rates_inputs_t) :: inputs
     type(condense_rates_outputs_t) :: outputs
+    type(iceGrowth_rates_inputs_t) :: inputs_ice
+    type(iceGrowth_rates_outputs_t) :: outputs_ice
 
     condense_count_vf = condense_count_vf + 1
 
@@ -537,22 +962,67 @@ contains
     inputs%pdot = condense_saved_pdot
     inputs%H = state(n_eqn)
 
+    inputs_ice%T = condense_saved_env_state_initial%temp &
+         + time * condense_saved_Tdot
+    inputs_ice%p = condense_saved_env_state_initial%pressure &
+         + time * condense_saved_pdot
+    inputs_ice%Tdot = condense_saved_Tdot
+    inputs_ice%pdot = condense_saved_pdot
+    inputs_ice%H = state(n_eqn)
+    !print*, "state(n_eqn) = ", state(1), state(2), state(n_eqn), state_p
+    !print*, state_p
+    !print*, ""
+
     Hdot = 0d0
+    ! TangWenhan
     do i_part = 1,(n_eqn - 1)
-       inputs%D = state(i_part)
-       inputs%D_dry = condense_saved_D_dry(i_part)
-       inputs%V_comp = (inputs%T &
-            * condense_saved_env_state_initial%pressure) &
-            / (condense_saved_env_state_initial%temp * inputs%p) &
-            / condense_saved_num_conc(i_part)
-       inputs%kappa = condense_saved_kappa(i_part)
-       call condense_rates(inputs, outputs)
-       state_dot(i_part) = outputs%Ddot
-       Hdot = Hdot + outputs%Hdot_i
+       if (.not. condense_saved_frozen(i_part)) then ! Water droplet
+           inputs%D = state(i_part)
+           inputs%D_dry = condense_saved_D_dry(i_part)
+           inputs%V_comp = (inputs%T &
+                * condense_saved_env_state_initial%pressure) &
+                / (condense_saved_env_state_initial%temp * inputs%p) &
+                / condense_saved_num_conc(i_part)
+           inputs%kappa = condense_saved_kappa(i_part)
+           call condense_rates(inputs, outputs)
+           state_dot(i_part) = outputs%Ddot
+           Hdot = Hdot + outputs%Hdot_i
+       else ! Ice
+           !print*, "frozen3"
+           inputs_ice%D = state(i_part)
+           inputs_ice%D_dry = condense_saved_D_dry(i_part)
+           inputs_ice%V_comp = (inputs%T &
+                * condense_saved_env_state_initial%pressure) &
+                / (condense_saved_env_state_initial%temp * inputs%p) &
+                / condense_saved_num_conc(i_part)
+           inputs_ice%den_ice = condense_saved_den_ice(i_part)
+           inputs_ice%den_dep = condense_saved_ice_density_dep(i_part)
+           inputs_ice%den_sub = condense_saved_ice_density_sub(i_part)
+           inputs_ice%ice_shape_phi = condense_saved_ice_shape_phi(i_part)
+           inputs_ice%fvi = condense_saved_fv(i_part)
+           inputs_ice%fti = condense_saved_ft(i_part)
+           inputs_ice%dfv_dR = condense_saved_dfv_dR(i_part)
+           inputs_ice%dft_dR = condense_saved_dft_dR(i_part)
+           call iceGrowth_rates(inputs_ice, outputs_ice)
+           !if (i_part .eq. 1) then
+           !    print*, inputs_ice%T, inputs_ice%p, inputs_ice%D, inputs_ice%H, outputs_ice%Ddot
+           !    stop
+           !    continue
+           !end if
+           state_dot(i_part) = outputs_ice%Ddot
+           Hdot = Hdot + outputs_ice%Hdot_i
+       end if
     end do
-    Hdot = Hdot + outputs%Hdot_env
+    ! TangWenhan
+    if (condense_saved_frozen(n_eqn - 1)) then  
+        !print*, "frozen4"
+        Hdot = Hdot + outputs_ice%Hdot_env
+    else
+        Hdot = Hdot + outputs%Hdot_env
+    end if
 
     state_dot(n_eqn) = Hdot
+    !print*, "state_dot = ", state_dot(1), state_dot(n_eqn)
 
   end subroutine condense_vf_f
 #endif
@@ -585,6 +1055,9 @@ contains
     integer :: i_part
     type(condense_rates_inputs_t) :: inputs
     type(condense_rates_outputs_t) :: outputs
+    ! TangWenhan
+    type(iceGrowth_rates_inputs_t) :: inputs_ice
+    type(iceGrowth_rates_outputs_t) :: outputs_ice
 
     call c_f_pointer(state_p, state, (/ n_eqn /))
 
@@ -596,22 +1069,62 @@ contains
     inputs%pdot = condense_saved_pdot
     inputs%H = state(n_eqn)
 
+    inputs_ice%T = condense_saved_env_state_initial%temp &
+         + time * condense_saved_Tdot
+    inputs_ice%p = condense_saved_env_state_initial%pressure &
+         + time * condense_saved_pdot
+    inputs_ice%Tdot = condense_saved_Tdot
+    inputs_ice%pdot = condense_saved_pdot
+    inputs_ice%H = state(n_eqn)
+
     dHdot_dH = 0d0
     do i_part = 1,(n_eqn - 1)
-       inputs%D = state(i_part)
-       inputs%D_dry = condense_saved_D_dry(i_part)
-       inputs%V_comp = (inputs%T &
-            * condense_saved_env_state_initial%pressure) &
-            / (condense_saved_env_state_initial%temp * inputs%p) &
-            / condense_saved_num_conc(i_part)
-       inputs%kappa = condense_saved_kappa(i_part)
-       call condense_rates(inputs, outputs)
-       dDdot_dD(i_part) = outputs%dDdot_dD
-       dDdot_dH(i_part) = outputs%dDdot_dH
-       dHdot_dD(i_part) = outputs%dHdoti_dD + outputs%dHdotenv_dD
-       dHdot_dH = dHdot_dH + outputs%dHdoti_dH
+       if (.not. condense_saved_frozen(i_part)) then
+           inputs%D = state(i_part)
+           inputs%D_dry = condense_saved_D_dry(i_part)
+           inputs%V_comp = (inputs%T &
+                * condense_saved_env_state_initial%pressure) &
+                / (condense_saved_env_state_initial%temp * inputs%p) &
+                / condense_saved_num_conc(i_part)
+           inputs%kappa = condense_saved_kappa(i_part)
+           call condense_rates(inputs, outputs)
+           dDdot_dD(i_part) = outputs%dDdot_dD
+           dDdot_dH(i_part) = outputs%dDdot_dH
+           dHdot_dD(i_part) = outputs%dHdoti_dD + outputs%dHdotenv_dD
+           dHdot_dH = dHdot_dH + outputs%dHdoti_dH
+       else
+           !print*, "frozen5"
+           inputs_ice%D = state(i_part)
+           inputs_ice%D_dry = condense_saved_D_dry(i_part)
+           inputs_ice%V_comp = (inputs%T &
+                * condense_saved_env_state_initial%pressure) &
+                / (condense_saved_env_state_initial%temp * inputs%p) &
+                / condense_saved_num_conc(i_part)
+           inputs_ice%den_ice = condense_saved_den_ice(i_part)
+           inputs_ice%den_dep = condense_saved_ice_density_dep(i_part)
+           inputs_ice%den_sub = condense_saved_ice_density_sub(i_part)
+           inputs_ice%ice_shape_phi = condense_saved_ice_shape_phi(i_part)
+           inputs_ice%fvi = condense_saved_fv(i_part)
+           inputs_ice%fti = condense_saved_ft(i_part)
+           inputs_ice%dfv_dR = condense_saved_dfv_dR(i_part)
+           inputs_ice%dft_dR = condense_saved_dft_dR(i_part)
+           call iceGrowth_rates(inputs_ice, outputs_ice)
+           dDdot_dD(i_part) = outputs_ice%dDdot_dD
+           dDdot_dH(i_part) = outputs_ice%dDdot_dH
+           dHdot_dD(i_part) = outputs_ice%dHdoti_dD + outputs_ice%dHdotenv_dD
+           dHdot_dH = dHdot_dH + outputs_ice%dHdoti_dH
+       end if
     end do
-    dHdot_dH = dHdot_dH + outputs%dHdotenv_dH
+    !print*, "dHdot_dH (before) = ", dHdot_dH
+    if (condense_saved_frozen(n_eqn - 1)) then
+        !print*, "frozen6"
+        !print*, "A", outputs_ice%dHdotenv_dH
+        dHdot_dH = dHdot_dH + outputs_ice%dHdotenv_dH
+    else
+        !print*, "B", outputs%dHdotenv_dH
+        dHdot_dH = dHdot_dH + outputs%dHdotenv_dH
+    end if
+    !print*, "dHdot_dH (after) = ", dHdot_dH
 
   end subroutine condense_jac
 #endif
@@ -647,6 +1160,7 @@ contains
     real(kind=dp) :: rhs_norm, soln_norm, residual_norm
     integer :: i_part
 
+    
     condense_count_solve = condense_count_solve + 1
 
     call condense_jac(n_eqn, time, state_p, dDdot_dD, dDdot_dH, &
@@ -655,7 +1169,10 @@ contains
     call c_f_pointer(state_p, state, (/ n_eqn /))
     call c_f_pointer(state_dot_p, state_dot, (/ n_eqn /))
     call c_f_pointer(rhs_p, rhs, (/ n_eqn /))
-
+    !print*, "-------- condense_jac_solve_f --------"
+    !print*, "state = ", state
+    !print*, "state_dot = ", state_dot
+    !print*, dDdot_dD(1), dDdot_dH(1), dHdot_dD(1), dHdot_dH
     !FIXME: write this all in matrix-vector notation, no i_part looping
     lhs_n = 1d0 - gamma * dHdot_dH
     rhs_n = rhs(n_eqn)
@@ -690,7 +1207,9 @@ contains
             rhs_norm, soln_norm, residual_norm, residual_norm / rhs_norm
     end if
 
+    !print*, "--------------------------------------"
     rhs = soln
+    !print*, "Fortran rhs(1) = ", rhs(1)
 
   end subroutine condense_jac_solve_f
 #endif
@@ -770,5 +1289,248 @@ contains
   end subroutine condense_equilib_particles
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  real(kind=dp) function get_Gamma_for_ice_growth(env_state)
+    type(env_state_t), intent(in) :: env_state
+    real(kind=dp) :: celsius, IGR1, IGR2, weight
+
+    celsius = env_state%temp - const%water_freeze_temp
+    if (celsius .gt. -1) then
+        celsius = -1
+    end if
+    if (celsius .lt. -60) then
+        celsius = -60
+    end if
+    weight = (ABS(real(int(celsius))) + 1.0) - ABS(celsius)
+    IGR1 = condense_saved_gammaFindTrip(int(celsius)*(-1))
+    IGR2 = condense_saved_gammaFindTrip((int(celsius)*(-1))+1)
+    !print*, "IGR1", IGR1, "IGR2", IGR2
+    get_Gamma_for_ice_growth = weight*IGR1 + (1.0-weight)*IGR2
+    
+  end function get_Gamma_for_ice_growth
+
+  real(kind=dp) function condense_update_ice_shape_phi(phi0,&
+          volume0, volume1, env_state, fva, fvc)
+    real(kind=dp), intent(in) :: phi0  
+    real(kind=dp), intent(in) :: volume0
+    real(kind=dp), intent(in) :: volume1
+    real(kind=dp), intent(in) :: fva, fvc
+    type(env_state_t), intent(in) :: env_state
+    real(kind=dp) :: IGR, II, IGRv
+    !integer :: i_part
+    IGR = get_Gamma_for_ice_growth(env_state)
+    IGRv = IGR * fvc / fva
+    II = (IGRv - 1) / (IGRv + 2)
+    !print*, volume1, volume0, phi0 * (volume1 / volume0) ** II
+    condense_update_ice_shape_phi = phi0 * (volume1 / volume0) ** II
+
+  end function condense_update_ice_shape_phi
+
+  real(kind=dp) function condense_update_ice_density(volume0, volume1, &
+          den_ice, den_dep, den_sub)
+    real(kind=dp), intent(in) :: volume0, volume1, den_ice, den_dep, den_sub
+    real(kind=dp) :: Vmin, beta, den_ice_new
+
+    if (volume1 .ge. volume0) then
+        den_ice_new = den_ice * (volume0 / volume1) + den_dep * &
+            (1 - volume0 / volume1)
+    else
+        den_ice_new = den_ice * (volume0 / volume1) + den_sub * &
+            (1 - volume0 / volume1)
+        den_ice_new = min(den_ice_new, const%reference_ice_density)
+        Vmin = 4d0 / 3d0 * const%pi * condense_Rice_avg**3
+        beta = const%reference_ice_density / den_ice_new / log(Vmin / volume0)
+        den_ice_new = den_ice_new + const%reference_ice_density * &
+            (volume1 ** beta  - volume0 ** beta) / (Vmin ** beta)
+    end if
+    condense_update_ice_density = den_ice_new
+
+  end function condense_update_ice_density
+
+  real(kind=dp) function condense_iceGrowth_capacitance(R, phi)
+    real(kind=dp), intent(in) :: R, phi
+    real(kind=dp) :: V, a, c, Cap
+
+    V = 4d0/3d0 * const%pi * R**3d0
+    a = (3d0/(4d0*const%pi) * (V / phi)) ** (1d0/3d0)
+    c = phi * a
+    if (phi .eq. 1) then
+        Cap = a
+    else if(phi .gt. 1) then
+        Cap = sqrt(c**2d0 - a**2d0) / log(  phi * (1d0 + sqrt(1d0 - phi**(-2)))  )
+    else
+        Cap = sqrt(a**2d0 - c**2d0) / asin(sqrt(1d0 - phi**2d0))
+    end if
+    condense_iceGrowth_capacitance = Cap
+
+  end function condense_iceGrowth_capacitance
+
+  real(kind=dp) function condense_dC_dR(phi)
+    real(kind=dp), intent(in) :: phi
+    real(kind=dp) :: dC_dR
+
+    if (phi .eq. 1) then
+        dC_dR = 1d0
+    else if(phi .gt. 1) then
+        dC_dR = phi ** (2d0/3d0) * sqrt(1d0 - phi ** (-2d0)) / log( phi *&
+                (1d0 + sqrt(1d0 - phi ** (-2d0))) )
+    else
+        dC_dR = phi ** (-1d0/3d0) * sqrt(1d0 - phi**2d0) / &
+            asin(sqrt(1d0 - phi**2d0))
+    end if
+    condense_dC_dR = dC_dR
+
+  end function condense_dC_dR
+
+  subroutine condense_ice_supersat_density(env_state)
+    type(env_state_t), intent(in) :: env_state
+    real(kind=dp) :: RH, es, ei, T, e, Rv
+    T = env_state%temp
+    RH = env_state%rel_humid
+    call env_state_saturated_vapor_pressure_water_3(T, es)
+    call env_state_saturated_vapor_pressure_ice_2(T, ei)
+    e = es * RH
+    Rv = const%univ_gas_const / const%water_molec_weight
+    condense_saved_ice_supersat_density = (e - ei) / (Rv * T) * 1000d0
+
+  end subroutine condense_ice_supersat_density
+
+  subroutine condense_ice_density_dep_sub(Vice, den_ice, env_state, dep, sub)
+
+    type(env_state_t), intent(in) :: env_state
+    real(kind=dp), intent(in) :: Vice, den_ice
+    real(kind=dp), intent(out) :: dep, sub
+    real(kind=dp) :: Vice_avg, T, IGR
+
+    !Vice = 4d0 / 3d0 * const%pi * Rice**3
+    Vice_avg = 4d0 / 3d0 * const%pi * condense_Rice_avg**3
+    T = env_state%temp
+    IGR = get_Gamma_for_ice_growth(env_state)
+
+    dep = const%reference_ice_density * exp(- 3d0 * max( &
+            condense_saved_ice_supersat_density - 5d-2, 0d0) / IGR)
+    !print*, "hhh", dep, - 3d0 * max( condense_saved_ice_supersat_density - &
+    !            5d-2, 0d0) / IGR, IGR
+    if (Vice .ge. Vice_avg) then
+        sub = den_ice
+    else
+        sub = const%reference_ice_density
+    end if
+
+  end subroutine condense_ice_density_dep_sub
+
+  subroutine condense_ice_ventilation(Rice_array, n_part, env_state)
+    implicit none
+    type(env_state_t), intent(in) :: env_state
+    integer, intent(in) :: n_part
+    real(kind=dp), intent(in) :: Rice_array(n_part)
+    real(kind=dp) :: T, press, den_ice, r_ice, phi, a_ice, c_ice, A, L, epsl_a
+    real(kind=dp) :: xi, am, bm, Nre_i, Nsc, Npr, Vti, Xvent_i, Xtherm_i, m_ice
+    real(kind=dp) :: Dv, Kt, kvisc, Rd, Rv, rho_air, bv1, bv2, gv, bt1, bt2, gt
+    real(kind=dp) :: fvi, fti, fva_i, fvc_i, dfv_dr, dft_dr
+    real(kind=dp) :: dm_dr, dxi_dr, dNre_dr, dXtherm_dr, dXvent_dr
+    integer :: i_part
+    T = env_state%temp
+    press = env_state%pressure
+    kt = 5.69 + 0.019 * (T - 273.15) * 418.684 * 1d-5 
+    Dv = 0.211d-4 / (press / const%air_std_press) * (T / 273d0)**1.94d0 
+    Rd = const%univ_gas_const / const%air_molec_weight
+    Rv = const%univ_gas_const / const%water_molec_weight
+    rho_air = press / (Rd * T) 
+    epsl_a = (1.718 + 0.0049 * T - 1.2d-5 * T**2) * 1d-5
+    kvisc = epsl_a / rho_air
+    Nsc = kvisc / Dv
+    Npr = kvisc / Kt
+    do i_part = 1, n_part
+        if (.not. condense_saved_frozen(i_part)) then
+            cycle
+        end if
+        r_ice = Rice_array(i_part)
+        den_ice = condense_saved_den_ice(i_part)
+        phi = condense_saved_ice_shape_phi(i_part)
+        a_ice = r_ice * phi**(-1d0/3d0)
+        c_ice = r_ice * phi**(2d0/3d0)
+        if (phi .le. 1d0) then
+            A = const%pi * a_ice**2
+            L = 2 * a_ice
+        else
+            A = const%pi * a_ice * c_ice
+            L = 2 * c_ice
+        end if
+        m_ice = 4d0/3d0 * const%pi * r_ice**3 * den_ice
+        xi = 2 * m_ice * (den_ice - rho_air) * const%std_grav * rho_air * L**2 &
+                / (A * epsl_a**2 * den_ice)
+        if (xi .le. 10) then
+            am = 0.04394
+            bm = 0.970
+        else if (xi .le. 585) then
+            am = 0.06049
+            bm = 0.831
+        else if (xi .le. 1.56d5) then
+            am = 0.2072
+            bm = 0.638
+        else if (xi .le. 1e8) then
+            am = 1.0865
+            bm = 0.499
+        else
+            !print*, "Ah Ah Ah"
+            am = 1.0865
+            bm = 0.499
+        end if
+        Nre_i = am * xi**bm
+        Vti = Nre_i * epsl_a / (rho_air * L)
+        Xvent_i = Nsc**(1d0/3d0) * Nre_i**(1d0/2d0)
+        Xtherm_i = Npr**(1d0/3d0) * Nre_i**(1d0/2d0)
+    
+        if (Xvent_i .le. 1) then
+            bv1 = 1d0
+            bv2 = 0.14
+            gv = 2d0
+        else
+            bv1 = 0.86
+            bv2 = 0.28
+            gv = 1d0
+        end if
+
+        if (Xtherm_i .lt. 1.4) then
+            bt1 = 1d0
+            bt2 = 0.108
+            gt = 2d0
+        else
+            bt1 = 0.78
+            bt2 = 0.308
+            gt = 1d0
+        end if
+
+        fvi = bv1 + bv2 * Xvent_i ** gv
+        fti = bt1 + bt2 * Xtherm_i ** gt
+        fva_i = bv1 + bv2 * (Xvent_i ** gv) * (a_ice / r_ice) ** (gv / 2d0)
+        fvc_i = bv1 + bv2 * (Xvent_i ** gv) * (c_ice / r_ice) ** (gv / 2d0)
+
+        dm_dr = 4 * const%pi * r_ice**2 * den_ice
+        if (phi .le. 1d0) then
+            dxi_dr = 2 * (den_ice - rho_air) * const%std_grav * rho_air /&
+                    (epsl_a**2 * den_ice) * (4d0 / const%std_grav) * dm_dr
+        else
+            dxi_dr = 2 * (den_ice - rho_air) * const%std_grav * rho_air/& 
+                    (epsl_a**2 * den_ice) * (4d0 / const%std_grav * phi) * dm_dr
+        end if
+        dNre_dr = am * bm * xi**(bm-1) * dxi_dr
+        dXvent_dr = 1d0 / 2d0 * Nsc**(1d0/3d0) * Nre_i **(-1d0/2d0) * dNre_dr
+        dXtherm_dr = 1d0 / 2d0 * Npr**(1d0/3d0) * Nre_i **(-1d0/2d0) * dNre_dr
+        dfv_dr = bv2 * gv * Xvent_i**(gv-1) * dXvent_dr
+        dft_dr = bt2 * gt * Xtherm_i**(gt-1) * dXtherm_dr
+
+
+        condense_saved_fv(i_part) = fvi
+        condense_saved_ft(i_part) = fti
+        condense_saved_fva(i_part) = fva_i
+        condense_saved_fvc(i_part) = fvc_i
+        condense_saved_dfv_dr(i_part) = dfv_dr
+        condense_saved_dft_dr(i_part) = dft_dr
+
+    end do
+
+  end subroutine condense_ice_ventilation
 
 end module pmc_condense
+

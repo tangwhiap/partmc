@@ -82,102 +82,104 @@ void condense_jac_solve_f(int neq, double t, double *ycur_f, double *fcur_f,
  * \return A result code (0 is success).
  */
 int condense_solver(int neq, double *x_f, double *abstol_f, double reltol_f,
-		    double t_initial_f, double t_final_f)
+            double t_initial_f, double t_final_f)
 {
-	realtype reltol, t_initial, t_final, t;
-	N_Vector y, abstol;
-	void *cvode_mem;
-	int flag, i;
-	realtype *y_data, *abstol_data;
+    realtype reltol, t_initial, t_final, t;
+    N_Vector y, abstol;
+    void *cvode_mem;
+    int flag, i;
+    realtype *y_data, *abstol_data;
 
-	y = abstol = NULL;
-	cvode_mem = NULL;
+    y = abstol = NULL;
+    cvode_mem = NULL;
 
 #if SUNDIALS_VERSION_MAJOR >= 6
-	SUNContext sunctx = NULL;
-	flag = SUNContext_Create(NULL, &sunctx);
-	if (condense_check_flag(&flag, "SUNContext_Create", 1))
+    SUNContext sunctx = NULL;
+    flag = SUNContext_Create(NULL, &sunctx);
+    if (condense_check_flag(&flag, "SUNContext_Create", 1))
                 return PMC_CONDENSE_SOLVER_INIT_SUNDIALS;
 #endif
 
 #if SUNDIALS_VERSION_MAJOR >= 6
-	y = N_VNew_Serial(neq, sunctx);
+    y = N_VNew_Serial(neq, sunctx);
 #else
-	y = N_VNew_Serial(neq);
+    y = N_VNew_Serial(neq);
 #endif
-	if (condense_check_flag((void *)y, "N_VNew_Serial", 0))
+    if (condense_check_flag((void *)y, "N_VNew_Serial", 0))
                 return PMC_CONDENSE_SOLVER_INIT_Y;
 
 #if SUNDIALS_VERSION_MAJOR >= 6
-	abstol = N_VNew_Serial(neq, sunctx);
+    abstol = N_VNew_Serial(neq, sunctx);
 #else
-	abstol = N_VNew_Serial(neq);
+    abstol = N_VNew_Serial(neq);
 #endif
-	if (condense_check_flag((void *)abstol, "N_VNew_Serial", 0))
+    if (condense_check_flag((void *)abstol, "N_VNew_Serial", 0))
                 return PMC_CONDENSE_SOLVER_INIT_ABSTOL;
 
-	y_data = NV_DATA_S(y);
-	abstol_data = NV_DATA_S(abstol);
-	for (i = 0; i < neq; i++) {
-		y_data[i] = x_f[i];
-		abstol_data[i] = abstol_f[i];
-	}
+    y_data = NV_DATA_S(y);
+    abstol_data = NV_DATA_S(abstol);
+    for (i = 0; i < neq; i++) {
+        y_data[i] = x_f[i];
+        abstol_data[i] = abstol_f[i];
+    }
 
-	reltol = reltol_f;
-	t_initial = t_initial_f;
-	t_final = t_final_f;
+    reltol = reltol_f;
+    t_initial = t_initial_f;
+    t_final = t_final_f;
 
 #if SUNDIALS_VERSION_MAJOR >= 6
-	cvode_mem = CVodeCreate(CV_BDF, sunctx);
+    cvode_mem = CVodeCreate(CV_BDF, sunctx);
 #else
-	cvode_mem = CVodeCreate(CV_BDF);
+    cvode_mem = CVodeCreate(CV_BDF);
 #endif
-	if (condense_check_flag((void *)cvode_mem, "CVodeCreate", 0))
+    if (condense_check_flag((void *)cvode_mem, "CVodeCreate", 0))
                 return PMC_CONDENSE_SOLVER_INIT_CVODE_MEM;
 
-	flag = CVodeInit(cvode_mem, condense_vf, t_initial, y);
-	if (condense_check_flag(&flag, "CVodeInit", 1))
+    flag = CVodeInit(cvode_mem, condense_vf, t_initial, y);
+    if (condense_check_flag(&flag, "CVodeInit", 1))
                 return PMC_CONDENSE_SOLVER_INIT_CVODE;
 
-	flag = CVodeSVtolerances(cvode_mem, reltol, abstol);
-	if (condense_check_flag(&flag, "CVodeSVtolerances", 1))
+    flag = CVodeSVtolerances(cvode_mem, reltol, abstol);
+    if (condense_check_flag(&flag, "CVodeSVtolerances", 1))
                 return PMC_CONDENSE_SOLVER_SVTOL;
 
-	flag = CVodeSetMaxNumSteps(cvode_mem, 100000);
-	if (condense_check_flag(&flag, "CVodeSetMaxNumSteps", 1))
+    flag = CVodeSetMaxNumSteps(cvode_mem, 100000);
+    if (condense_check_flag(&flag, "CVodeSetMaxNumSteps", 1))
                 return PMC_CONDENSE_SOLVER_SET_MAX_STEPS;
 
 
 #if SUNDIALS_VERSION_MAJOR >= 6
-	SUNLinearSolver LS = SUNLinSol_SPGMR(y, PREC_LEFT, 0, sunctx);
+    SUNLinearSolver LS = SUNLinSol_SPGMR(y, PREC_LEFT, 0, sunctx);
 #else
-	SUNLinearSolver LS = SUNLinSol_SPGMR(y, PREC_LEFT, 0);
+    SUNLinearSolver LS = SUNLinSol_SPGMR(y, PREC_LEFT, 0);
 #endif
-	if (condense_check_flag((void *)LS, "SUNLinSol_SPGMR", 0))
+    if (condense_check_flag((void *)LS, "SUNLinSol_SPGMR", 0))
                 return PMC_CONDENSE_SOLVER_LINSOL_CTOR;
-	flag = CVodeSetLinearSolver(cvode_mem, LS, NULL);
-	if (condense_check_flag(&flag, "CVodeSetLinearSolver", 1))
+    flag = CVodeSetLinearSolver(cvode_mem, LS, NULL);
+    if (condense_check_flag(&flag, "CVodeSetLinearSolver", 1))
                 return PMC_CONDENSE_SOLVER_LINSOL_SET;
-	flag = CVodeSetPreconditioner(cvode_mem, NULL, condense_solver_Solve);
-	if (condense_check_flag(&flag, "CVodeSetPreconditioner", 1))
+    flag = CVodeSetPreconditioner(cvode_mem, NULL, condense_solver_Solve);
+    if (condense_check_flag(&flag, "CVodeSetPreconditioner", 1))
                 return PMC_CONDENSE_SOLVER_LINSOL_PREC;
 
-	t = t_initial;
-	flag = CVode(cvode_mem, t_final, y, &t, CV_NORMAL);
-	if (condense_check_flag(&flag, "CVode", 1))
+    t = t_initial;
+	//printf("Call condense_solver\n");
+    flag = CVode(cvode_mem, t_final, y, &t, CV_NORMAL);
+    //printf("condense_solver CVode end\n");
+    if (condense_check_flag(&flag, "CVode", 1))
                 return PMC_CONDENSE_SOLVER_FAIL;
 
-	for (i = 0; i < neq; i++) {
-		x_f[i] = y_data[i];
-	}
+    for (i = 0; i < neq; i++) {
+        x_f[i] = y_data[i];
+    }
 
-	N_VDestroy_Serial(y);
-	N_VDestroy_Serial(abstol);
-	CVodeFree(&cvode_mem);
+    N_VDestroy_Serial(y);
+    N_VDestroy_Serial(abstol);
+    CVodeFree(&cvode_mem);
 #if SUNDIALS_VERSION_MAJOR >= 6
-	SUNContext_Free(&sunctx);
+    SUNContext_Free(&sunctx);
 #endif
-	return PMC_CONDENSE_SOLVER_SUCCESS;
+    return PMC_CONDENSE_SOLVER_SUCCESS;
 }
 
 /** \brief The ODE vector field to integrate.
@@ -192,28 +194,29 @@ int condense_solver(int neq, double *x_f, double *abstol_f, double reltol_f,
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 static int condense_vf(realtype t, N_Vector y, N_Vector ydot, void *user_data)
 {
-	realtype *y_data, *ydot_data;
-	int i, neq;
-	double *y_f, *ydot_f;
+    realtype *y_data, *ydot_data;
+    int i, neq;
+    double *y_f, *ydot_f;
 
-	neq = NV_LENGTH_S(y);
-	y_data = NV_DATA_S(y);
-	ydot_data = NV_DATA_S(ydot);
+    neq = NV_LENGTH_S(y);
+    y_data = NV_DATA_S(y);
+    ydot_data = NV_DATA_S(ydot);
 
-	y_f = malloc(neq * sizeof(double));
-	ydot_f = malloc(neq * sizeof(double));
+    y_f = malloc(neq * sizeof(double));
+    ydot_f = malloc(neq * sizeof(double));
 
-	for (i = 0; i < neq; i++) {
-		y_f[i] = y_data[i];
-	}
-	condense_vf_f(neq, t, y_f, ydot_f);
-	for (i = 0; i < neq; i++) {
-		ydot_data[i] = ydot_f[i];
-	}
+    for (i = 0; i < neq; i++) {
+        y_f[i] = y_data[i];
+    }
+    condense_vf_f(neq, t, y_f, ydot_f);
+    for (i = 0; i < neq; i++) {
+        ydot_data[i] = ydot_f[i];
+    }
 
-	free(y_f);
-	free(ydot_f);
-	return(0);
+    //printf("y_f[0] = %.12f, ydot_data[0] = %.12f\n", y_f[0], ydot_data[0]);
+    free(y_f);
+    free(ydot_f);
+    return(0);
 }
 #pragma GCC diagnostic pop
 
@@ -244,7 +247,7 @@ static int condense_check_flag(void *flagvalue, char *funcname, int opt)
   if (opt == 0 && flagvalue == NULL) {
     fprintf(stderr,
             "\nSUNDIALS_ERROR: %s() failed - returned NULL pointer\n\n",
-	    funcname);
+        funcname);
     return(1); }
 
   /* Check if flag < 0 */
@@ -252,13 +255,13 @@ static int condense_check_flag(void *flagvalue, char *funcname, int opt)
     errflag = (int *) flagvalue;
     if (*errflag < 0) {
       fprintf(stderr, "\nSUNDIALS_ERROR: %s() failed with flag = %d\n\n",
-	      funcname, *errflag);
+          funcname, *errflag);
       return(1); }}
 
   /* Check if function returned NULL pointer - no memory allocated */
   else if (opt == 2 && flagvalue == NULL) {
     fprintf(stderr, "\nMEMORY_ERROR: %s() failed - returned NULL pointer\n\n",
-	    funcname);
+        funcname);
     return(1); }
 
   return(0);
@@ -277,33 +280,33 @@ static int condense_solver_Solve(double t, N_Vector ycur, N_Vector fcur,
 				 N_Vector b, N_Vector z, double gamma,
                                  double delta, int lr, void *user_data)
 {
-	realtype *b_data, *ycur_data, *fcur_data, *z_data;
-	int i, neq;
-	double *b_f, *ycur_f, *fcur_f;
+    realtype *b_data, *ycur_data, *fcur_data, *z_data;
+    int i, neq;
+    double *b_f, *ycur_f, *fcur_f;
 
-	neq = NV_LENGTH_S(b);
-	b_data = NV_DATA_S(b);
-	z_data = NV_DATA_S(z);
-	ycur_data = NV_DATA_S(ycur);
-	fcur_data = NV_DATA_S(fcur);
+    neq = NV_LENGTH_S(b);
+    b_data = NV_DATA_S(b);
+    z_data = NV_DATA_S(z);
+    ycur_data = NV_DATA_S(ycur);
+    fcur_data = NV_DATA_S(fcur);
 
-	b_f = malloc(neq * sizeof(double));
-	ycur_f = malloc(neq * sizeof(double));
-	fcur_f = malloc(neq * sizeof(double));
+    b_f = malloc(neq * sizeof(double));
+    ycur_f = malloc(neq * sizeof(double));
+    fcur_f = malloc(neq * sizeof(double));
 
-	for (i = 0; i < neq; i++) {
-		b_f[i] = b_data[i];
-		ycur_f[i] = ycur_data[i];
-		fcur_f[i] = fcur_data[i];
-	}
-	condense_jac_solve_f(neq, t, ycur_f, fcur_f, b_f, gamma);
-	for (i = 0; i < neq; i++) {
-		z_data[i] = b_f[i];
-	}
-
-	free(b_f);
-	free(ycur_f);
-	free(fcur_f);
-	return(0);
+    for (i = 0; i < neq; i++) {
+        b_f[i] = b_data[i];
+        ycur_f[i] = ycur_data[i];
+        fcur_f[i] = fcur_data[i];
+    }
+    condense_jac_solve_f(neq, t, ycur_f, fcur_f, b_f, gamma);
+    for (i = 0; i < neq; i++) {
+        z_data[i] = b_f[i];
+    }
+	//printf("Jac ycur_f[0] = %.12f, fcur_f = %.12f, b_f[0] = %.12E\n", ycur_f[0], fcur_f[0], b_f[0]);
+    free(b_f);
+    free(ycur_f);
+    free(fcur_f);
+    return(0);
 }
 #pragma GCC diagnostic pop
