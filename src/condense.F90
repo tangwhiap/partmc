@@ -377,17 +377,18 @@ contains
        !    print*, "state(1) = ", state(i_part)
        !end if
        !> TangWenhan
+       print*, i_part, aero_state%apa%particle(i_part)%frozen
        if (aero_state%apa%particle(i_part)%frozen) then
             
             ice_D3 = state(i_part) **3d0 + 6d0/const%pi * &
                 aero_state%apa%particle(i_part)%vol(aero_data%i_water) * &
                     (const%water_density / aero_state%apa%particle(i_part)%den_ice - 1d0)
-            !if (i_part .eq. 1) then
-                !print*, "state(1)=", state(i_part), aero_state%apa%particle(i_part)%vol(aero_data%i_water) * &
-                !    (const%water_density), &
-                !    aero_state%apa%particle(i_part)%den_ice, &
-                !    aero_state%apa%particle(i_part)%frozen
-            !end if
+            if (i_part .eq. 1) then
+                print*, "state(1)=", state(i_part), aero_state%apa%particle(i_part)%vol(aero_data%i_water) * &
+                    (const%water_density), &
+                    aero_state%apa%particle(i_part)%den_ice, &
+                    aero_state%apa%particle(i_part)%frozen
+            end if
             state(i_part) = ice_D3 ** (1d0/3d0)
             
             particle_volume_initial(i_part) = const%pi / 6d0 * ice_D3
@@ -397,7 +398,8 @@ contains
                     aero_state%apa%particle(i_part)%den_ice, &
                     env_state_initial, &
                     condense_saved_ice_density_dep(i_part), &
-                    condense_saved_ice_density_sub(i_part) )
+                    condense_saved_ice_density_sub(i_part), &
+                    condense_saved_do_ice_shape)
                                 
             end if
             !if (i_part .eq. 1143) then
@@ -1394,20 +1396,27 @@ contains
 
   end subroutine condense_ice_supersat_density
 
-  subroutine condense_ice_density_dep_sub(Vice, den_ice, env_state, dep, sub)
+  subroutine condense_ice_density_dep_sub(Vice, den_ice, env_state, dep, sub, &
+          do_ice_shape)
 
     type(env_state_t), intent(in) :: env_state
     real(kind=dp), intent(in) :: Vice, den_ice
+    logical, intent(in) :: do_ice_shape
     real(kind=dp), intent(out) :: dep, sub
     real(kind=dp) :: Vice_avg, T, IGR
 
     !Vice = 4d0 / 3d0 * const%pi * Rice**3
     Vice_avg = 4d0 / 3d0 * const%pi * condense_Rice_avg**3
     T = env_state%temp
-    IGR = get_Gamma_for_ice_growth(env_state)
+    if (do_ice_shape) then
+        IGR = get_Gamma_for_ice_growth(env_state)
+    else
+        IGR = 1d0
+    end if
 
     dep = const%reference_ice_density * exp(- 3d0 * max( &
             condense_saved_ice_supersat_density - 5d-2, 0d0) / IGR)
+    print*, condense_saved_ice_supersat_density, IGR, dep
     !print*, "hhh", dep, - 3d0 * max( condense_saved_ice_supersat_density - &
     !            5d-2, 0d0) / IGR, IGR
     if (Vice .ge. Vice_avg) then
