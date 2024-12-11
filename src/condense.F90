@@ -377,18 +377,18 @@ contains
        !    print*, "state(1) = ", state(i_part)
        !end if
        !> TangWenhan
-       print*, i_part, aero_state%apa%particle(i_part)%frozen
+       !print*, i_part, aero_state%apa%particle(i_part)%frozen
        if (aero_state%apa%particle(i_part)%frozen) then
             
             ice_D3 = state(i_part) **3d0 + 6d0/const%pi * &
                 aero_state%apa%particle(i_part)%vol(aero_data%i_water) * &
                     (const%water_density / aero_state%apa%particle(i_part)%den_ice - 1d0)
-            if (i_part .eq. 1) then
-                print*, "state(1)=", state(i_part), aero_state%apa%particle(i_part)%vol(aero_data%i_water) * &
-                    (const%water_density), &
-                    aero_state%apa%particle(i_part)%den_ice, &
-                    aero_state%apa%particle(i_part)%frozen
-            end if
+            !if (i_part .eq. 1) then
+            !    print*, "state(1)=", state(i_part), aero_state%apa%particle(i_part)%vol(aero_data%i_water) * &
+            !        (const%water_density), &
+            !        aero_state%apa%particle(i_part)%den_ice, &
+            !        aero_state%apa%particle(i_part)%frozen
+            !end if
             state(i_part) = ice_D3 ** (1d0/3d0)
             
             particle_volume_initial(i_part) = const%pi / 6d0 * ice_D3
@@ -853,7 +853,6 @@ contains
         G = (Ls / (Rv * inputs%T) - 1d0) * Ls / (k_a * fti * inputs%T) + &
             Rv * inputs%T / (D_v * fvi * P0_ice)
         !print*, Ls, Lv, D_v, k_a
-        !print*, "G=", G
         if (condense_saved_do_ice_shape) then
             Cap = condense_iceGrowth_capacitance(R, phi)
             d_Cap_d_R = condense_dC_dR(phi)
@@ -880,7 +879,12 @@ contains
         end if
         !print*, dG_dR
         !Rdot = (inputs%H * P0 / P0_ice - 1d0) * Cap / (R**2 * inputs%den_ice * G)
+
         Rdot = (inputs%H * P0 / P0_ice - 1d0) * Cap / (R**2 * spec_den * G)
+        !!!!!! Temporary
+        !Rdot = 0.148645043 * Cap / (R**2 * spec_den * G)
+
+
         MRii_dot = 4d0 * const%pi * R**2 * spec_den * Rdot / &
             inputs%V_comp / rho_air
         !Hdot_i = -inputs%H * (Lv * Ls / (Rv * inputs%T**2 * &
@@ -918,6 +922,11 @@ contains
         !outputs%dHdoti_dH = -4d200
         !print*, Hdot_i * P0 / Rv / inputs%T + 4 * const%pi * R**2 * &
         !    inputs%den_ice * Rdot / inputs%V_comp
+
+        !print*, "Ls=",Ls,"Rv=",Rv,"k_a=",k_a,"D_v=", D_v,&
+        !    "dR=",outputs%Ddot/2,"Cap/R=", Cap/R,"gtp=",G**(-1d0), &
+        !    "si=",(inputs%H * P0 / P0_ice - 1d0),"RhoDep=",spec_den,&
+        !    "R=", R
 
     end if
 
@@ -1011,6 +1020,7 @@ contains
            !    stop
            !    continue
            !end if
+           !print*, outputs_ice%Ddot / 2, inputs_ice%D / 2
            state_dot(i_part) = outputs_ice%Ddot
            Hdot = Hdot + outputs_ice%Hdot_i
        end if
@@ -1393,6 +1403,7 @@ contains
     e = es * RH
     Rv = const%univ_gas_const / const%water_molec_weight
     condense_saved_ice_supersat_density = (e - ei) / (Rv * T) * 1000d0
+    !print*, "el=",e,"ei=",ei,"Rv=",Rv,"T=",T
 
   end subroutine condense_ice_supersat_density
 
@@ -1416,7 +1427,11 @@ contains
 
     dep = const%reference_ice_density * exp(- 3d0 * max( &
             condense_saved_ice_supersat_density - 5d-2, 0d0) / IGR)
-    print*, condense_saved_ice_supersat_density, IGR, dep
+
+    !!! Temporary
+    !dep = const%reference_ice_density * exp(- 3d0 * max( &
+    !        0.206045434 - 5d-2, 0d0) / IGR)
+    !print*, condense_saved_ice_supersat_density, IGR, dep
     !print*, "hhh", dep, - 3d0 * max( condense_saved_ice_supersat_density - &
     !            5d-2, 0d0) / IGR, IGR
     if (Vice .ge. Vice_avg) then
@@ -1445,7 +1460,7 @@ contains
     Rd = const%univ_gas_const / const%air_molec_weight
     Rv = const%univ_gas_const / const%water_molec_weight
     rho_air = press / (Rd * T) 
-    epsl_a = (1.718 + 0.0049 * T - 1.2d-5 * T**2) * 1d-5
+    epsl_a = (1.718 + 0.0049 * (T - 273.15) - 1.2d-5 * (T - 273.15)**2) * 1d-5
     kvisc = epsl_a / rho_air
     Nsc = kvisc / Dv
     Npr = kvisc / Kt
@@ -1536,6 +1551,12 @@ contains
         condense_saved_fvc(i_part) = fvc_i
         condense_saved_dfv_dr(i_part) = dfv_dr
         condense_saved_dft_dr(i_part) = dft_dr
+
+        print*,"fv-1=",fvi-1,"ft-1=",fti-1,"fvc-1=",fvc_i-1,"fva-1=",fva_i-1,&
+            "Xvent=",Xvent_i,"Xtherm=",Xtherm_i, "X=",xi,"epsl=",epsl_a, &
+            "area=", &
+            A,"nre=",Nre_i,"npr=",Npr,"am=",am,"bm=",bm,"bv1=",bv1,"bv2=",bv2,"gv=",gv,&
+            "bt1=",bt1,"bt2=",bt2,"gt=",gt, "nsc=", Nsc
 
     end do
 
