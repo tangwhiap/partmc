@@ -62,6 +62,15 @@ module pmc_condense
   !> Result code indicating failure of the solver.
   integer, parameter :: PMC_CONDENSE_SOLVER_FAIL           = 7
 
+  integer, parameter :: CONDENSE_ICE_DEP_DENSITY_SCHEME_CHENLAMB = 1
+  integer, parameter :: CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_CTL = 2
+  integer, parameter :: CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_LOCAL = 3
+  integer, parameter :: CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_FIX = 4
+  
+  integer, parameter :: CONDENSE_GAMMA_DIMENSION = 60
+  integer, parameter :: CONDENSE_POKRIFKA_SI_DIMENSION = 100
+  integer, parameter :: CONDENSE_POKRIFKA_DEPDEN_DIMENSION = 100
+
   !> Internal-use structure for storing the inputs for the
   !> rate-calculation function.
   type condense_rates_inputs_t
@@ -209,12 +218,33 @@ module pmc_condense
   real(kind=dp), allocatable :: condense_saved_fvc(:)
   real(kind=dp), allocatable :: condense_saved_dfv_dR(:)
   real(kind=dp), allocatable :: condense_saved_dft_dR(:)
+  !real(kind=dp), allocatable :: condense_saved_pokrifka_depden_dist_si(:)
+  !real(kind=dp), allocatable :: condense_saved_pokrifka_depden_dist_den(:)
+  !real(kind=dp), allocatable :: condense_saved_pokrifka_depden_cdf(:, :)
+  !real(kind=dp), allocatable :: condense_saved_pokrifka_depden_part(:)
+  !real(kind=dp), allocatable :: condense_saved_pokrifka_depden_func_part(:, :)
+
+  !integer :: CONDENSE_POKRIFKA_SI_DIMENSION = 0
+  !integer :: CONDENSE_POKRIFKA_DEPDEN_DIMENSION = 0
 
   logical :: condense_saved_do_ice_shape
   logical :: condense_saved_do_ice_density
   logical :: condense_saved_do_ice_ventilation
-  real(kind=dp) :: condense_saved_gammaFindTrip(60)
-  logical :: condense_gamma_accessed = .False.
+  real(kind=dp) :: condense_saved_gammaFindTrip(CONDENSE_GAMMA_DIMENSION)
+  real(kind=dp) :: condense_saved_pokrifka_depden_dist_si( &
+       CONDENSE_POKRIFKA_SI_DIMENSION)
+  real(kind=dp) :: condense_saved_pokrifka_depden_dist_den( &
+       CONDENSE_POKRIFKA_DEPDEN_DIMENSION)
+  real(kind=dp) :: condense_saved_pokrifka_depden_cdf( &
+       CONDENSE_POKRIFKA_SI_DIMENSION, CONDENSE_POKRIFKA_DEPDEN_DIMENSION)
+  !real(kind=dp) :: condense_saved_pokrifka_depden_part( &
+  !     CONDENSE_POKRIFKA_DEPDEN_DIMENSION)
+  !real(kind=dp) :: condense_saved_pokrifka_depden_func_part( &
+  !     CONDENSE_POKRIFKA_SI_DIMENSION, CONDENSE_POKRIFKA_DEPDEN_DIMENSION)
+  logical :: condense_gamma_accessed = .false.
+  logical :: condense_pokrifka_dendist_accessed = .false.
+  !logical :: condense_pokrifka_depden_part_allocated = .false.
+  logical :: condense_pokrifka_depden_func_part_allocated = .false.
   real(kind=dp) :: condense_saved_ice_supersat_density
 
   !> Internal-use variable for counting calls to the vector field
@@ -232,7 +262,8 @@ contains
   !> including updating the environment to account for the lost
   !> water vapor.
   subroutine condense_particles(aero_state, aero_data, env_state_initial, &
-       env_state_final, del_t, do_ice_shape, do_ice_density, do_ice_ventilation)
+       env_state_final, del_t, do_ice_shape, do_ice_density, &
+       do_ice_ventilation, ice_dep_density_scheme_type)
 
     !> Aerosol state.
     type(aero_state_t), intent(inout) :: aero_state
@@ -249,6 +280,7 @@ contains
     logical, intent(in) :: do_ice_shape
     logical, intent(in) :: do_ice_density
     logical, intent(in) :: do_ice_ventilation
+    integer, intent(in) :: ice_dep_density_scheme_type
     real(kind=dp) :: P0
 
     integer :: i_part, n_eqn, i_eqn
@@ -297,8 +329,22 @@ contains
             OPEN(60, file = 'gammaFindTrip')
             READ(60,*) condense_saved_gammaFindTrip
             CLOSE(60)
-            condense_gamma_accessed = .True.
+            condense_gamma_accessed = .true.
         end if
+    end if
+    if (do_ice_density .AND. ( &
+         (ice_dep_density_scheme_type .eq. &
+         CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_CTL) .OR. &
+         (ice_dep_density_scheme_type .eq. &
+         CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_LOCAL) .OR. &
+         (ice_dep_density_scheme_type .eq. &
+         CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_FIX) )) then
+       call condense_access_pokrifka_depden_dist()
+       !if ((ice_dep_density_scheme_type .eq. &
+       !     CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_CTL)) then
+            !.and. (.not. condense_pokrifka_depden_part_allocated)) then
+       !   call condense_ice_depden_pokrifka_ctl_initialization(aero_state)
+       !end if
     end if
     !print*, do_ice_shape, do_ice_density, do_ice_ventilation
     ! initial water concentration in the aerosol particles
@@ -399,7 +445,9 @@ contains
                     env_state_initial, &
                     condense_saved_ice_density_dep(i_part), &
                     condense_saved_ice_density_sub(i_part), &
-                    condense_saved_do_ice_shape)
+                    condense_saved_do_ice_shape, &
+                    ice_dep_density_scheme_type, &
+                    aero_state%apa%particle(i_part))
                                 
             end if
             !if (i_part .eq. 1143) then
@@ -563,14 +611,14 @@ contains
     V_comp_ratio = env_state_final%temp * env_state_initial%pressure &
          / (env_state_initial%temp * env_state_final%pressure)
     !print*, water_vol_conc_final * const%water_density
-    call env_state_saturated_vapor_pressure_water(env_state_initial, P0)
+    P0 = env_state_saturated_vapor_pressure_water(env_state_initial%temp)
     vapor_vol_conc_initial = aero_data%molec_weight(aero_data%i_water) &
          / (const%univ_gas_const * env_state_initial%temp) &
          * env_state_sat_vapor_pressure(env_state_initial) &
          !* P0 &
          * env_state_initial%rel_humid &
          / aero_particle_water_density(aero_data)
-    call env_state_saturated_vapor_pressure_water(env_state_final, P0)
+    P0 = env_state_saturated_vapor_pressure_water(env_state_final%temp)
     vapor_vol_conc_final = aero_data%molec_weight(aero_data%i_water) &
          / (const%univ_gas_const * env_state_final%temp) &
          * env_state_sat_vapor_pressure(env_state_final) &
@@ -607,6 +655,17 @@ contains
     deallocate(condense_saved_dft_dR)
     deallocate(particle_volume_initial)
     deallocate(particle_volume_final)
+    !if (condense_pokrifka_dendist_accessed) then
+    !   deallocate(condense_saved_pokrifka_depden_dist_si)
+    !   deallocate(condense_saved_pokrifka_depden_dist_den)
+    !   deallocate(condense_saved_pokrifka_depden_cdf)
+    !end if
+    !if (condense_pokrifka_depden_part_allocated) then
+    !   deallocate(condense_saved_pokrifka_depden_part)
+    !end if
+    !if (condense_pokrifka_depden_func_part_allocated) then
+    !   deallocate(condense_saved_pokrifka_depden_func_part)
+    !end if
 
     !print*, "end condensation"
   end subroutine condense_particles
@@ -847,8 +906,8 @@ contains
         Rd = const%univ_gas_const / const%air_molec_weight
         Rv = const%univ_gas_const / const%water_molec_weight
         rho_air = inputs%p / (Rd * inputs%T)
-        call env_state_saturated_vapor_pressure_water_3(inputs%T, P0)
-        call env_state_saturated_vapor_pressure_ice_2(inputs%T, P0_ice)
+        P0 = env_state_saturated_vapor_pressure_water_2(inputs%T)
+        P0_ice = env_state_saturated_vapor_pressure_ice(inputs%T)
         Ls = Lv + (Cpv - Cpw) * (inputs%T - const%water_freeze_temp)
         G = (Ls / (Rv * inputs%T) - 1d0) * Ls / (k_a * fti * inputs%T) + &
             Rv * inputs%T / (D_v * fvi * P0_ice)
@@ -1337,6 +1396,8 @@ contains
 
   end function condense_update_ice_shape_phi
 
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
   real(kind=dp) function condense_update_ice_density(volume0, volume1, &
           den_ice, den_dep, den_sub)
     real(kind=dp), intent(in) :: volume0, volume1, den_ice, den_dep, den_sub
@@ -1358,6 +1419,8 @@ contains
 
   end function condense_update_ice_density
 
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
   real(kind=dp) function condense_iceGrowth_capacitance(R, phi)
     real(kind=dp), intent(in) :: R, phi
     real(kind=dp) :: V, a, c, Cap
@@ -1376,6 +1439,8 @@ contains
 
   end function condense_iceGrowth_capacitance
 
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
   real(kind=dp) function condense_dC_dR(phi)
     real(kind=dp), intent(in) :: phi
     real(kind=dp) :: dC_dR
@@ -1393,13 +1458,15 @@ contains
 
   end function condense_dC_dR
 
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
   subroutine condense_ice_supersat_density(env_state)
     type(env_state_t), intent(in) :: env_state
     real(kind=dp) :: RH, es, ei, T, e, Rv
     T = env_state%temp
     RH = env_state%rel_humid
-    call env_state_saturated_vapor_pressure_water_3(T, es)
-    call env_state_saturated_vapor_pressure_ice_2(T, ei)
+    es = env_state_saturated_vapor_pressure_water_2(T)
+    ei = env_state_saturated_vapor_pressure_ice(T)
     e = es * RH
     Rv = const%univ_gas_const / const%water_molec_weight
     condense_saved_ice_supersat_density = (e - ei) / (Rv * T) * 1000d0
@@ -1407,26 +1474,33 @@ contains
 
   end subroutine condense_ice_supersat_density
 
-  subroutine condense_ice_density_dep_sub(Vice, den_ice, env_state, dep, sub, &
-          do_ice_shape)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+  subroutine condense_ice_density_dep_sub(Vice, den_ice, env_state, dep, sub, &
+          do_ice_shape, ice_dep_density_scheme_type, aero_particle)
+
+    type(aero_particle_t), intent(inout) :: aero_particle
     type(env_state_t), intent(in) :: env_state
     real(kind=dp), intent(in) :: Vice, den_ice
     logical, intent(in) :: do_ice_shape
+    integer, intent(in) :: ice_dep_density_scheme_type
     real(kind=dp), intent(out) :: dep, sub
-    real(kind=dp) :: Vice_avg, T, IGR
+    real(kind=dp) :: Vice_avg, T
 
-    !Vice = 4d0 / 3d0 * const%pi * Rice**3
-    Vice_avg = 4d0 / 3d0 * const%pi * condense_Rice_avg**3
-    T = env_state%temp
-    if (do_ice_shape) then
-        IGR = get_Gamma_for_ice_growth(env_state)
-    else
-        IGR = 1d0
+    
+    !T = env_state%temp
+
+    !> Calculate deposition density.
+    if (ice_dep_density_scheme_type .eq. &
+         CONDENSE_ICE_DEP_DENSITY_SCHEME_CHENLAMB) then
+       dep = condense_ice_depden_chenlamb(env_state, do_ice_shape)
+    else if (ice_dep_density_scheme_type .eq. &
+         CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_CTL) then
+       call condense_ice_depden_pokrifka_ctl(aero_particle, env_state, dep)
+    else if (ice_dep_density_scheme_type .eq. &
+         CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_LOCAL) then
+       dep = condense_ice_depden_pokrifka_local(env_state)
     end if
-
-    dep = const%reference_ice_density * exp(- 3d0 * max( &
-            condense_saved_ice_supersat_density - 5d-2, 0d0) / IGR)
 
     !!! Temporary
     !dep = const%reference_ice_density * exp(- 3d0 * max( &
@@ -1434,6 +1508,10 @@ contains
     !print*, condense_saved_ice_supersat_density, IGR, dep
     !print*, "hhh", dep, - 3d0 * max( condense_saved_ice_supersat_density - &
     !            5d-2, 0d0) / IGR, IGR
+
+    !> Calculate sublimation density.
+    !Vice = 4d0 / 3d0 * const%pi * Rice**3
+    Vice_avg = 4d0 / 3d0 * const%pi * condense_Rice_avg**3
     if (Vice .ge. Vice_avg) then
         sub = den_ice
     else
@@ -1441,6 +1519,160 @@ contains
     end if
 
   end subroutine condense_ice_density_dep_sub
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  real(kind=dp) function condense_ice_depden_chenlamb(env_state, do_ice_shape)
+     type(env_state_t), intent(in) :: env_state
+
+     logical, intent(in) :: do_ice_shape
+     real(kind=dp) :: IGR
+
+    if (do_ice_shape) then
+       IGR = get_Gamma_for_ice_growth(env_state)
+    else
+       IGR = 1d0
+    end if
+    condense_ice_depden_chenlamb = const%reference_ice_density * &
+         exp(- 3d0 * max(condense_saved_ice_supersat_density - 5d-2, 0d0) / IGR)
+  end function condense_ice_depden_chenlamb
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  subroutine condense_access_pokrifka_depden_dist()
+    integer :: n_si, n_den, i_si, i_den
+    open(61, file = 'pokrifka_rhodep.dat')
+    read(61, *) n_si
+    read(61, *) n_den
+    !allocate(condense_saved_pokrifka_depden_dist_si(n_si))
+    !allocate(condense_saved_pokrifka_depden_dist_den(n_den))
+    !allocate(condense_saved_pokrifka_depden_cdf(n_si, n_den))
+    read(61, *) (condense_saved_pokrifka_depden_dist_si(i_si),&
+         i_si = 1, n_si)
+    read(61, *) (condense_saved_pokrifka_depden_dist_den(i_den),&
+         i_den = 1, n_den)
+    read(61, *) ((condense_saved_pokrifka_depden_cdf(i_si, i_den),&
+         i_si = 1, n_si), i_den = 1, n_den)
+    close(61)
+    !CONDENSE_POKRIFKA_SI_DIMENSION = n_si
+    !CONDENSE_POKRIFKA_DEPDEN_DIMENSION = n_den
+    condense_pokrifka_dendist_accessed = .true.
+  end subroutine  condense_access_pokrifka_depden_dist
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  integer function condense_pokrifka_find_nearest_si_index(si)
+    real(kind=dp) :: si, si_lower, si_upper = -1d0
+    integer :: ind_si = -1, i_si
+
+    si_lower = 0d0
+    do i_si = 1, CONDENSE_POKRIFKA_SI_DIMENSION
+       si_upper = condense_saved_pokrifka_depden_dist_si(i_si)
+       if (si_upper .ge. si) then
+          if ((i_si .eq. 0) .or. (si - si_lower .gt. si_upper - si)) then
+             ind_si = i_si
+          else
+             ind_si = i_si - 1
+          end if
+          exit
+       end if
+       si_lower = si_upper
+    end do
+    if (si_upper .lt. si) then
+       ind_si = CONDENSE_POKRIFKA_SI_DIMENSION
+    end if
+    condense_pokrifka_find_nearest_si_index = ind_si
+
+    !print*, "Sampling Si = ", si, condense_saved_pokrifka_depden_dist_si(ind_si)
+
+  end function condense_pokrifka_find_nearest_si_index
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  real(kind=dp) function condense_pokrifka_depden_sampling(env_state)
+    type(env_state_t), intent(in) :: env_state
+    real(kind=dp) :: si, P0, P0_ice, P_vapor, rand_var
+    real(kind=dp) :: depden_lower, depden_upper, alpha
+    real(kind=dp) :: thres_lower, thres_upper = -1d0, depden
+    integer :: ind_si, ind_den = -1, i_den
+
+    P0 = env_state_saturated_vapor_pressure_water_2(env_state%temp)
+    P0_ice = env_state_saturated_vapor_pressure_ice(env_state%temp)
+    P_vapor = env_state%rel_humid * P0
+    si = (P_vapor - P0_ice) / (P0 - P0_ice)
+    ind_si = condense_pokrifka_find_nearest_si_index(si)
+    rand_var = pmc_random()
+    thres_lower = 0d0
+    do i_den = 1, CONDENSE_POKRIFKA_DEPDEN_DIMENSION
+       thres_upper = condense_saved_pokrifka_depden_cdf(ind_si, i_den) + 1e-12
+       if (thres_upper .ge. rand_var) then
+          ind_den = i_den
+          exit
+        end if
+        thres_lower = thres_upper
+    end do
+    if (ind_den .eq. 1) then
+       depden = condense_saved_pokrifka_depden_dist_den(ind_den)
+    else
+       alpha = (rand_var - thres_lower) / (thres_upper - thres_lower)
+       depden_upper = condense_saved_pokrifka_depden_dist_den(ind_den)
+       depden_lower = condense_saved_pokrifka_depden_dist_den(ind_den - 1)
+       depden = depden_lower * (1 - alpha) + depden_upper * alpha
+    end if
+    condense_pokrifka_depden_sampling = depden
+
+    !print*, "cdf:", thres_lower, rand_var, thres_upper
+
+  end function condense_pokrifka_depden_sampling
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  !subroutine condense_ice_depden_pokrifka_ctl_initialization(aero_state)
+  !  type(aero_state_t), intent(in) :: aero_state
+  !  allocate(condense_saved_pokrifka_depden_part(aero_state_n_part(aero_state)))
+  !  condense_saved_pokrifka_depden_part(:) = const%nan
+  !  condense_pokrifka_depden_part_allocated = .true.
+  !end subroutine condense_ice_depden_pokrifka_ctl_initialization
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  subroutine condense_ice_depden_pokrifka_ctl(aero_particle, env_state, depden)
+    type(aero_particle_t), intent(inout) :: aero_particle
+    type(env_state_t), intent(in) :: env_state
+    real(kind=dp), intent(out) :: depden
+    if (aero_particle%depden .ge. 0d0) then
+       depden = aero_particle%depden
+       !print*, "Already sampled depden = ", depden 
+    else
+       !print*, "Sample for new;  old = ", &
+             !aero_particle%depden
+       depden = condense_pokrifka_depden_sampling(env_state)
+       aero_particle%depden = depden
+    end if
+    !condense_ice_depden_pokrifka_ctl = depden
+  end subroutine condense_ice_depden_pokrifka_ctl
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  real(kind=dp) function condense_ice_depden_pokrifka_local(env_state)
+    type(env_state_t), intent(in) :: env_state
+    condense_ice_depden_pokrifka_local = &
+         condense_pokrifka_depden_sampling(env_state)
+  end function condense_ice_depden_pokrifka_local
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  subroutine condense_ice_depden_pokrifka_fix_initialization(env_state)
+    type(env_state_t), intent(in) :: env_state
+  end subroutine condense_ice_depden_pokrifka_fix_initialization
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  real(kind=dp) function condense_ice_depden_pokrifka_fix(env_state)
+    type(env_state_t), intent(in) :: env_state
+    condense_ice_depden_pokrifka_fix = 0
+  end function condense_ice_depden_pokrifka_fix
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
   subroutine condense_ice_ventilation(Rice_array, n_part, env_state)
     implicit none
@@ -1552,15 +1784,64 @@ contains
         condense_saved_dfv_dr(i_part) = dfv_dr
         condense_saved_dft_dr(i_part) = dft_dr
 
-        print*,"fv-1=",fvi-1,"ft-1=",fti-1,"fvc-1=",fvc_i-1,"fva-1=",fva_i-1,&
-            "Xvent=",Xvent_i,"Xtherm=",Xtherm_i, "X=",xi,"epsl=",epsl_a, &
-            "area=", &
-            A,"nre=",Nre_i,"npr=",Npr,"am=",am,"bm=",bm,"bv1=",bv1,"bv2=",bv2,"gv=",gv,&
-            "bt1=",bt1,"bt2=",bt2,"gt=",gt, "nsc=", Nsc
+        !print*,"fv-1=",fvi-1,"ft-1=",fti-1,"fvc-1=",fvc_i-1,"fva-1=",fva_i-1,&
+        !    "Xvent=",Xvent_i,"Xtherm=",Xtherm_i, "X=",xi,"epsl=",epsl_a, &
+        !    "area=", &
+        !    A,"nre=",Nre_i,"npr=",Npr,"am=",am,"bm=",bm,"bv1=",bv1,"bv2=",bv2,"gv=",gv,&
+        !    "bt1=",bt1,"bt2=",bt2,"gt=",gt, "nsc=", Nsc
 
     end do
 
   end subroutine condense_ice_ventilation
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  !> Read the specification for a kernel type from a spec file and
+  !> generate it.
+  subroutine spec_file_read_ice_dep_density_scheme_type(file, ice_dep_density_scheme_type)
+
+    !> Spec file.
+    type(spec_file_t), intent(inout) :: file
+    !> Kernel type.
+    integer, intent(out) :: ice_dep_density_scheme_type
+
+    character(len=SPEC_LINE_MAX_VAR_LEN) :: dep_scheme
+
+    !> \page input_format_ice_dep_density_scheme Input File Format: ice
+    !!   deposition density scheme.
+    !!
+    !! The ice deposition density  scheme is specified by the parameter:
+    !!   - \b ice_dep_density_scheme (string): the type of ice deposition density scheme
+    !!   must be one of: \c sedi for the gravitational sedimentation
+    !!   kernel; \c additive for the additive kernel; \c constant
+    !!   for the constant kernel; \c brown for the Brownian kernel,
+    !!   or \c zero for no immersion freezing
+    !!
+    !! If \c ice_dep_density_scheme is \c additive, the kernel coefficient needs to be
+    !! provided using the \c additive_kernel_coeff parameter
+    !!
+    !! See also:
+    !!   - \ref spec_file_format --- the input file text format
+
+    call spec_file_read_string(file, 'ice_dep_density_scheme', dep_scheme)
+    if (trim(dep_scheme) == 'chenlamb') then
+       ice_dep_density_scheme_type = CONDENSE_ICE_DEP_DENSITY_SCHEME_CHENLAMB
+    elseif (trim(dep_scheme) == 'pokrifka_ctl') then
+       ice_dep_density_scheme_type = &
+            CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_CTL
+    elseif (trim(dep_scheme) == 'pokrifka_local') then
+       ice_dep_density_scheme_type = &
+            CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_LOCAL
+    elseif (trim(dep_scheme) == 'pokrifka_fix') then
+       ice_dep_density_scheme_type = &
+            CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_FIX
+    else
+       call spec_file_die_msg(321125901, file, &
+        "Unknown ice deposition density scheme: " // trim(dep_scheme))
+    end if
+
+  end subroutine spec_file_read_ice_dep_density_scheme_type
+
+
 
 end module pmc_condense
 

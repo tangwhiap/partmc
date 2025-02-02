@@ -64,6 +64,10 @@ module pmc_aero_particle
      real(kind=dp) :: den_ice
      !> Ice shape.
      real(kind=dp) :: ice_shape_phi
+     !> Ice deposition density.
+     real(kind=dp) :: depden
+     !> Ice deposition density function.
+     real(kind=dp), allocatable :: depden_func(:)
      !> True number of primary particles contributing to particle.
      integer :: n_primary_parts
   end type aero_particle_t
@@ -108,6 +112,9 @@ contains
     aero_particle_to%imf_temperature = aero_particle_from%imf_temperature
     aero_particle_to%den_ice = aero_particle_from%den_ice
     aero_particle_to%ice_shape_phi = aero_particle_from%ice_shape_phi
+    aero_particle_to%depden = aero_particle_from%depden
+    call move_alloc(aero_particle_from%depden_func, &
+            aero_particle_to%depden_func)
     aero_particle_to%n_primary_parts = aero_particle_from%n_primary_parts
 
   end subroutine aero_particle_shift
@@ -147,6 +154,9 @@ contains
     aero_particle%imf_temperature = 0d0
     aero_particle%den_ice = const%nan
     aero_particle%ice_shape_phi = const%nan
+    aero_particle%depden = const%nan
+    call ensure_real_array_size(aero_particle%depden_func, 100)
+    aero_particle%depden_func(:) = const%nan
     aero_particle%n_primary_parts = 0
 
   end subroutine aero_particle_zero
@@ -930,7 +940,7 @@ contains
     real(kind=dp) :: ice_vol_1, ice_vol_2
     integer :: n_comp_1, n_comp_2, n_comp_1_new, n_comp_2_new, i
     type(aero_component_t), allocatable :: new_aero_component(:)
-    integer :: n_swbands
+    integer :: n_swbands, n_depden_func
     integer, allocatable :: sample(:)
 
     call assert(203741686, size(aero_particle_1%vol) &
@@ -945,6 +955,8 @@ contains
     call ensure_real_array_size(aero_particle_new%asymmetry, n_swbands)
     call ensure_complex_array_size(aero_particle_new%refract_shell, n_swbands)
     call ensure_complex_array_size(aero_particle_new%refract_core, n_swbands)
+    n_depden_func = size(aero_particle_1%depden_func)
+    call ensure_real_array_size(aero_particle_new%depden_func, n_depden_func)
     aero_particle_new%absorb_cross_sect = 0d0
     aero_particle_new%scatter_cross_sect = 0d0
     aero_particle_new%asymmetry = 0d0
@@ -1025,6 +1037,15 @@ contains
     else
        aero_particle_new%den_ice = const%nan
     end if
+    aero_particle_new%depden = (aero_particle_1%depden + &
+         aero_particle_2%depden) / 2d0
+
+    do i = 1, 100
+       !print*, aero_particle_1%depden_func(i), aero_particle_2%depden_func(i)
+       aero_particle_new%depden_func(i) = (aero_particle_1%depden_func(i) + &
+            aero_particle_2%depden_func(i)) / 2d0
+       !aero_particle_new%depden_func(i) = const%nan
+    end do
 
 
     aero_particle_new%n_primary_parts = aero_particle_1%n_primary_parts &
@@ -1077,6 +1098,8 @@ contains
          + pmc_mpi_pack_size_real(val%imf_temperature) &
          + pmc_mpi_pack_size_real(val%den_ice) &
          + pmc_mpi_pack_size_real(val%ice_shape_phi) &
+         + pmc_mpi_pack_size_real(val%depden) &
+         + pmc_mpi_pack_size_real_array(val%depden_func) &
          + pmc_mpi_pack_size_integer(val%n_primary_parts)
 
     do i = 1,aero_particle_n_components(val)
@@ -1124,6 +1147,8 @@ contains
     call pmc_mpi_pack_real(buffer, position, val%imf_temperature)
     call pmc_mpi_pack_real(buffer, position, val%den_ice)
     call pmc_mpi_pack_real(buffer, position, val%ice_shape_phi)
+    call pmc_mpi_pack_real(buffer, position, val%depden)
+    call pmc_mpi_pack_real_array(buffer, position, val%depden_func)
     call pmc_mpi_pack_integer(buffer, position, val%n_primary_parts)
     call assert(810223998, position - prev_position &
          <= pmc_mpi_pack_size_aero_particle(val))
@@ -1171,6 +1196,8 @@ contains
     call pmc_mpi_unpack_real(buffer, position, val%imf_temperature)
     call pmc_mpi_unpack_real(buffer, position, val%den_ice)
     call pmc_mpi_unpack_real(buffer, position, val%ice_shape_phi)
+    call pmc_mpi_unpack_real(buffer, position, val%depden)
+    call pmc_mpi_unpack_real_array(buffer, position, val%depden_func)
     call pmc_mpi_unpack_integer(buffer, position, val%n_primary_parts)
     call assert(287447241, position - prev_position &
          <= pmc_mpi_pack_size_aero_particle(val))
