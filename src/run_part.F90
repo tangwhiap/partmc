@@ -252,6 +252,14 @@ contains
        call ice_nucleation_singular_initialize(aero_state, aero_data, &
                run_part_opt%INAS_a, run_part_opt%INAS_b)
     end if
+    if (run_part_opt%do_immersion_freezing .and. &
+         run_part_opt%do_condensation .and. &
+         run_part_opt%do_ice_density .and. &
+         (run_part_opt%ice_dep_density_scheme_type .eq. &
+         CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_FIX)) then
+       call condense_ice_depden_pokrifka_fix_initialization(env_state, &
+            aero_state)
+    end if
 
     i_cur = 1
     i_next = n_time

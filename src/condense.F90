@@ -332,8 +332,9 @@ contains
             condense_gamma_accessed = .true.
         end if
     end if
-    if (do_ice_density .AND. ( &
-         (ice_dep_density_scheme_type .eq. &
+    if ((.not. condense_pokrifka_dendist_accessed) .AND. &
+         do_ice_density .AND. &
+         ((ice_dep_density_scheme_type .eq. &
          CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_CTL) .OR. &
          (ice_dep_density_scheme_type .eq. &
          CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_LOCAL) .OR. &
@@ -1500,6 +1501,9 @@ contains
     else if (ice_dep_density_scheme_type .eq. &
          CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_LOCAL) then
        dep = condense_ice_depden_pokrifka_local(env_state)
+    else if (ice_dep_density_scheme_type .eq. &
+         CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_FIX) then
+       dep = condense_ice_depden_pokrifka_fix(env_state, aero_particle)
     end if
 
     !!! Temporary
@@ -1569,7 +1573,7 @@ contains
     do i_si = 1, CONDENSE_POKRIFKA_SI_DIMENSION
        si_upper = condense_saved_pokrifka_depden_dist_si(i_si)
        if (si_upper .ge. si) then
-          if ((i_si .eq. 0) .or. (si - si_lower .gt. si_upper - si)) then
+          if ((i_si .eq. 1) .or. (si - si_lower .gt. si_upper - si)) then
              ind_si = i_si
           else
              ind_si = i_si - 1
@@ -1589,17 +1593,13 @@ contains
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-  real(kind=dp) function condense_pokrifka_depden_sampling(env_state)
-    type(env_state_t), intent(in) :: env_state
-    real(kind=dp) :: si, P0, P0_ice, P_vapor, rand_var
+  real(kind=dp) function condense_pokrifka_depden_sampling_core(si)
+    real(kind=dp), intent(in) :: si
+    real(kind=dp) :: rand_var
     real(kind=dp) :: depden_lower, depden_upper, alpha
     real(kind=dp) :: thres_lower, thres_upper = -1d0, depden
-    integer :: ind_si, ind_den = -1, i_den
+    integer :: ind_si, i_den, ind_den = -1
 
-    P0 = env_state_saturated_vapor_pressure_water_2(env_state%temp)
-    P0_ice = env_state_saturated_vapor_pressure_ice(env_state%temp)
-    P_vapor = env_state%rel_humid * P0
-    si = (P_vapor - P0_ice) / (P0 - P0_ice)
     ind_si = condense_pokrifka_find_nearest_si_index(si)
     rand_var = pmc_random()
     thres_lower = 0d0
@@ -1619,9 +1619,24 @@ contains
        depden_lower = condense_saved_pokrifka_depden_dist_den(ind_den - 1)
        depden = depden_lower * (1 - alpha) + depden_upper * alpha
     end if
-    condense_pokrifka_depden_sampling = depden
+    condense_pokrifka_depden_sampling_core = depden
+  end function condense_pokrifka_depden_sampling_core
 
-    !print*, "cdf:", thres_lower, rand_var, thres_upper
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  real(kind=dp) function condense_pokrifka_depden_sampling(T, rel_humid)
+    !type(env_state_t), intent(in) :: env_state
+    real(kind=dp), intent(in) :: T, rel_humid
+    real(kind=dp) :: si, P0, P0_ice, P_vapor
+
+    P0 = env_state_saturated_vapor_pressure_water_2(T)
+    P0_ice = env_state_saturated_vapor_pressure_ice(T)
+    P_vapor = rel_humid * P0
+    si = (P_vapor - P0_ice) / (P0 - P0_ice)
+    
+    condense_pokrifka_depden_sampling = &
+         condense_pokrifka_depden_sampling_core(si)
+
 
   end function condense_pokrifka_depden_sampling
 
@@ -1645,7 +1660,8 @@ contains
     else
        !print*, "Sample for new;  old = ", &
              !aero_particle%depden
-       depden = condense_pokrifka_depden_sampling(env_state)
+       depden = condense_pokrifka_depden_sampling(env_state%temp, &
+            env_state%rel_humid)
        aero_particle%depden = depden
     end if
     !condense_ice_depden_pokrifka_ctl = depden
@@ -1656,20 +1672,48 @@ contains
   real(kind=dp) function condense_ice_depden_pokrifka_local(env_state)
     type(env_state_t), intent(in) :: env_state
     condense_ice_depden_pokrifka_local = &
-         condense_pokrifka_depden_sampling(env_state)
+         condense_pokrifka_depden_sampling(env_state%temp, &
+         env_state%rel_humid)
   end function condense_ice_depden_pokrifka_local
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-  subroutine condense_ice_depden_pokrifka_fix_initialization(env_state)
+  subroutine condense_ice_depden_pokrifka_fix_initialization(env_state, &
+       aero_state)
     type(env_state_t), intent(in) :: env_state
+    type(aero_state_t), intent(inout) :: aero_state
+    real(kind=dp) :: depden
+    integer i_part, i_si
+    if (.not. condense_pokrifka_dendist_accessed) then
+       call condense_access_pokrifka_depden_dist()
+    end if
+    do i_part = 1, aero_state_n_part(aero_state)
+       do i_si = 1, CONDENSE_POKRIFKA_SI_DIMENSION
+           depden = condense_pokrifka_depden_sampling_core( &
+                condense_saved_pokrifka_depden_dist_si(i_si))
+           aero_state%apa%particle(i_part)%depden_func(i_si) = depden
+       end do
+    end do
   end subroutine condense_ice_depden_pokrifka_fix_initialization
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-  real(kind=dp) function condense_ice_depden_pokrifka_fix(env_state)
+  real(kind=dp) function condense_ice_depden_pokrifka_fix(env_state, &
+       aero_particle)
     type(env_state_t), intent(in) :: env_state
-    condense_ice_depden_pokrifka_fix = 0
+    type(aero_particle_t), intent(in) :: aero_particle
+    real(kind=dp) :: si, P0, P0_ice, P_vapor
+    integer :: i_si
+
+    P0 = env_state_saturated_vapor_pressure_water_2(env_state%temp)
+    P0_ice = env_state_saturated_vapor_pressure_ice(env_state%temp)
+    P_vapor = env_state%rel_humid * P0
+    si = (P_vapor - P0_ice) / (P0 - P0_ice)
+    i_si = condense_pokrifka_find_nearest_si_index(si)
+
+    condense_ice_depden_pokrifka_fix = &
+         aero_particle%depden_func(i_si)
+
   end function condense_ice_depden_pokrifka_fix
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
