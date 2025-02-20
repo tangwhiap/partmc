@@ -33,7 +33,6 @@ contains
   subroutine ice_nucleation_immersion_freezing(aero_state, aero_data, &
        env_state, del_t, immersion_freezing_scheme_type, &
        freezing_rate, do_freezing_naive)
-
     !> Aerosol state.
     type(aero_state_t), intent(inout) :: aero_state
     !> Aerosol data.
@@ -94,6 +93,8 @@ contains
     real(kind=dp) :: aerosol_diameter
 
     T0 = const%water_freeze_temp
+    a_INAS = -0.517 
+    b_INAS = 8.934
     do i_part = 1, aero_state_n_part(aero_state)
        aerosol_diameter = aero_particle_dry_diameter( &
             aero_state%apa%particle(i_part), aero_data)
