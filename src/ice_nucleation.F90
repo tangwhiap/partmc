@@ -51,6 +51,15 @@ contains
 
     !> Call the immersion freezing subroutine according to the immersion
     !> freezing scheme.
+
+    !!! The bug:
+    print*, "p1_bin#:", aero_sorted_particle_in_bin(aero_state%aero_sorted, &
+            aero_state%apa%particle(1), aero_data), &
+            "N_bin=", size(aero_state%aero_sorted%size_class%inverse, 1), &
+            "Dp_wet=", aero_particle_diameter(aero_state%apa%particle(1), &
+                    aero_data), &
+            !"Dp_dry=", aero_particle_dry_diameter(aero_state%apa%particle(1), &
+            !        aero_data), &
     if (env_state%temp <= const%water_freeze_temp) then
        if ((immersion_freezing_scheme_type == IMMERSION_FREEZING_SCHEME_ABIFM) &
             .OR. (immersion_freezing_scheme_type == IMMERSION_FREEZING_SCHEME_CONST)) then
@@ -72,6 +81,7 @@ contains
                'Error type of immersion freezing scheme')
        endif
     endif
+
 
   end subroutine ice_nucleation_immersion_freezing
 
@@ -205,10 +215,8 @@ contains
     if (immersion_freezing_scheme_type == IMMERSION_FREEZING_SCHEME_ABIFM) then
        call ABIFM_max_spec(aero_data, a_w_ice, i_spec_max, j_het_max)
     endif
-
     n_bins = aero_sorted_n_bin(aero_state%aero_sorted)
     n_class = aero_sorted_n_class(aero_state%aero_sorted)
-
     loop_bins: do i_bin = 1, n_bins
        loop_classes: do i_class = 1, n_class
           n_parts_in_bin = integer_varray_n_entry(&
@@ -405,6 +413,8 @@ contains
        surface_ratio = aero_particle%vol(i_spec) / total_vol
        j_het_x_area = j_het_x_area + j_het * immersed_surface_area * &
             surface_ratio
+       !print*, a_w_ice, j_het, immersed_surface_area, surface_ratio,&
+            !j_het_x_area
     end do
 
     ABIFM_Pfrz_particle = 1 - exp(-j_het_x_area * del_t)

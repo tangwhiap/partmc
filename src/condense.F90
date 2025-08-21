@@ -941,8 +941,11 @@ contains
         !Rdot = (inputs%H * P0 / P0_ice - 1d0) * Cap / (R**2 * inputs%den_ice * G)
 
         Rdot = (inputs%H * P0 / P0_ice - 1d0) * Cap / (R**2 * spec_den * G)
-        !!!!!! Temporary
+        !!!!!! Temporary -> SH11
         !Rdot = 0.148645043 * Cap / (R**2 * spec_den * G)
+        !print*, "si=", P0 / P0_ice - 1d0
+
+        !Rdot = (1d0 * P0 / P0_ice - 1d0) * Cap / (R**2 * spec_den * G)
 
 
         MRii_dot = 4d0 * const%pi * R**2 * spec_den * Rdot / &
@@ -1369,8 +1372,8 @@ contains
     if (celsius .gt. -1) then
         celsius = -1
     end if
-    if (celsius .lt. -60) then
-        celsius = -60
+    if (celsius .lt. -59) then
+        celsius = -59
     end if
     weight = (ABS(real(int(celsius))) + 1.0) - ABS(celsius)
     IGR1 = condense_saved_gammaFindTrip(int(celsius)*(-1))
@@ -1429,6 +1432,7 @@ contains
     V = 4d0/3d0 * const%pi * R**3d0
     a = (3d0/(4d0*const%pi) * (V / phi)) ** (1d0/3d0)
     c = phi * a
+    !print*, "a=", a, "c=", c, "phi=", phi
     if (phi .eq. 1) then
         Cap = a
     else if(phi .gt. 1) then
@@ -1471,6 +1475,8 @@ contains
     e = es * RH
     Rv = const%univ_gas_const / const%water_molec_weight
     condense_saved_ice_supersat_density = (e - ei) / (Rv * T) * 1000d0
+    !! Temporary -> SH11
+    !condense_saved_ice_supersat_density = (es - ei) / (Rv * T) * 1000d0
     !print*, "el=",e,"ei=",ei,"Rv=",Rv,"T=",T
 
   end subroutine condense_ice_supersat_density
@@ -1539,6 +1545,8 @@ contains
     end if
     condense_ice_depden_chenlamb = const%reference_ice_density * &
          exp(- 3d0 * max(condense_saved_ice_supersat_density - 5d-2, 0d0) / IGR)
+    !print*, "IGR=", IGR, condense_ice_depden_chenlamb, &
+    !     "si=", condense_saved_ice_supersat_density
   end function condense_ice_depden_chenlamb
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

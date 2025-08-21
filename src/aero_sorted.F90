@@ -194,6 +194,7 @@ contains
 
     integer :: i_part, i_bin, i_group, i_class
 
+    print*, "aero_sorted_sort_particles"
     call integer_rmap2_zero(aero_sorted%size_class)
     call integer_rmap2_zero(aero_sorted%group_class)
 
@@ -202,6 +203,10 @@ contains
             aero_particle_array%particle(i_part), aero_data)
        i_group = aero_particle_array%particle(i_part)%weight_group
        i_class = aero_particle_array%particle(i_part)%weight_class
+       if (i_part .eq. 1) then
+           print*, i_part, i_bin, i_group, i_class, &
+                size(aero_sorted%size_class%inverse, 1)
+       end if
        call integer_rmap2_append(aero_sorted%size_class, i_bin, i_class)
        call integer_rmap2_append(aero_sorted%group_class, i_group, i_class)
     end do

@@ -113,6 +113,8 @@ contains
     !> Second range value.
     integer, intent(in) :: i_range_2
 
+    !print*, "within integer_rmap2_append", i_range_1, &
+    !    size(integer_rmap2%inverse, 1)
     call assert(438521606, allocated(integer_rmap2%inverse))
     call assert(708651144, i_range_1 >= 1)
     call assert(779828769, i_range_1 <= size(integer_rmap2%inverse, 1))

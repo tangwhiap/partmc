@@ -66,7 +66,8 @@ module pmc_constants
      !> Reference ice density (kg m^{-3}).
      real(kind=dp) :: reference_ice_density = 920d0
      !> Immersion freezing water mass ratio threshold.
-     real(kind=dp) :: imf_water_threshold = 1d-2
+     !real(kind=dp) :: imf_water_threshold = 1d-2
+     real(kind=dp) :: imf_water_threshold = 0.5d0
      !> NaN value.
      real(kind=dp) :: nan = -9999d0
   end type const_t
