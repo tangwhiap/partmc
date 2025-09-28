@@ -82,6 +82,16 @@ module pmc_run_part
      !> Whether to use the naive algorithm for time-dependent scheme.
      !> (If false, use the binned tau-leaping algorithm.)
      logical :: do_freezing_naive
+
+     !> Whether to simulation ice shape variation
+     logical :: do_ice_shape = .false.
+     !> Whether to simulation ice density variation
+     logical :: do_ice_density = .false.
+     !> The ice deposition density scheme.
+     integer :: ice_dep_density_scheme_type
+     !> Whether to simulation ventilation effect
+     !> for ice growth.
+     logical :: do_ice_ventilation = .false.
      !> Allow doubling if needed.
      logical :: allow_doubling
      !> Allow halving if needed.
@@ -750,6 +760,18 @@ contains
        endif
        
     endif
+    if (run_part_opt%do_immersion_freezing .and. run_part_opt%do_condensation) then 
+       call spec_file_read_logical(file, 'do_ice_shape', &
+            run_part_opt%do_ice_shape)
+       call spec_file_read_logical(file, 'do_ice_density', &
+            run_part_opt%do_ice_density)
+       if (run_part_opt%do_ice_density) then
+          call spec_file_read_ice_dep_density_scheme_type(file, &
+               run_part_opt%ice_dep_density_scheme_type)
+       endif
+       call spec_file_read_logical(file, 'do_ice_ventilation', &
+            run_part_opt%do_ice_ventilation)
+    endif
 
     call spec_file_read_integer(file, 'rand_init', rand_init)
     call spec_file_read_logical(file, 'allow_doubling', &
@@ -945,8 +967,10 @@ contains
 
 #ifdef PMC_USE_SUNDIALS
     if (run_part_opt%do_condensation) then
-       call condense_particles(aero_state, aero_data, old_env_state, &
-            env_state, run_part_opt%del_t)
+        call condense_particles(aero_state, aero_data, old_env_state, &
+             env_state, run_part_opt%del_t, run_part_opt%do_ice_shape, &
+             run_part_opt%do_ice_density, run_part_opt%do_ice_ventilation, &
+             run_part_opt%ice_dep_density_scheme_type)
     end if
 #endif
 

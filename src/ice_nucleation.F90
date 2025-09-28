@@ -53,13 +53,14 @@ contains
     !> freezing scheme.
 
     !!! The bug:
-    print*, "p1_bin#:", aero_sorted_particle_in_bin(aero_state%aero_sorted, &
-            aero_state%apa%particle(1), aero_data), &
-            "N_bin=", size(aero_state%aero_sorted%size_class%inverse, 1), &
-            "Dp_wet=", aero_particle_diameter(aero_state%apa%particle(1), &
-                    aero_data), &
+    !print*, "p1_bin#:", aero_sorted_particle_in_bin(aero_state%aero_sorted, &
+    !        aero_state%apa%particle(1), aero_data), &
+    !        "N_bin=", size(aero_state%aero_sorted%size_class%inverse, 1), &
+    !        "Dp_wet=", aero_particle_diameter(aero_state%apa%particle(1), &
+    !                aero_data)
             !"Dp_dry=", aero_particle_dry_diameter(aero_state%apa%particle(1), &
             !        aero_data), &
+
     if (env_state%temp <= const%water_freeze_temp) then
        if ((immersion_freezing_scheme_type == IMMERSION_FREEZING_SCHEME_ABIFM) &
             .OR. (immersion_freezing_scheme_type == IMMERSION_FREEZING_SCHEME_CONST)) then
@@ -103,8 +104,6 @@ contains
     real(kind=dp) :: aerosol_diameter
 
     T0 = const%water_freeze_temp
-    a_INAS = -0.517 
-    b_INAS = 8.934
     do i_part = 1, aero_state_n_part(aero_state)
        aerosol_diameter = aero_particle_dry_diameter( &
             aero_state%apa%particle(i_part), aero_data)

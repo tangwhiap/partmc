@@ -206,7 +206,7 @@ module pmc_condense
   !> Internal-use variable for storing the per-particle frozen state
   !> concentrations during calls to the ODE solver.
   !> TangWenhan
-  integer, parameter :: condense_Rice_avg = 10d-6
+  real(kind=dp), parameter :: condense_Rice_avg = 10d-6
   logical, allocatable :: condense_saved_frozen(:)
   real(kind=dp), allocatable :: condense_saved_den_ice(:)
   real(kind=dp), allocatable :: condense_saved_ice_shape_phi(:)
@@ -612,14 +612,14 @@ contains
     V_comp_ratio = env_state_final%temp * env_state_initial%pressure &
          / (env_state_initial%temp * env_state_final%pressure)
     !print*, water_vol_conc_final * const%water_density
-    P0 = env_state_saturated_vapor_pressure_water(env_state_initial%temp)
+    P0 = env_state_saturated_vapor_pressure_wrt_water(env_state_initial%temp)
     vapor_vol_conc_initial = aero_data%molec_weight(aero_data%i_water) &
          / (const%univ_gas_const * env_state_initial%temp) &
          * env_state_sat_vapor_pressure(env_state_initial) &
          !* P0 &
          * env_state_initial%rel_humid &
          / aero_particle_water_density(aero_data)
-    P0 = env_state_saturated_vapor_pressure_water(env_state_final%temp)
+    P0 = env_state_saturated_vapor_pressure_wrt_water(env_state_final%temp)
     vapor_vol_conc_final = aero_data%molec_weight(aero_data%i_water) &
          / (const%univ_gas_const * env_state_final%temp) &
          * env_state_sat_vapor_pressure(env_state_final) &
@@ -907,8 +907,8 @@ contains
         Rd = const%univ_gas_const / const%air_molec_weight
         Rv = const%univ_gas_const / const%water_molec_weight
         rho_air = inputs%p / (Rd * inputs%T)
-        P0 = env_state_saturated_vapor_pressure_water_2(inputs%T)
-        P0_ice = env_state_saturated_vapor_pressure_ice(inputs%T)
+        P0 = env_state_saturated_vapor_pressure_wrt_water_2(inputs%T)
+        P0_ice = env_state_saturated_vapor_pressure_wrt_ice(inputs%T)
         Ls = Lv + (Cpv - Cpw) * (inputs%T - const%water_freeze_temp)
         G = (Ls / (Rv * inputs%T) - 1d0) * Ls / (k_a * fti * inputs%T) + &
             Rv * inputs%T / (D_v * fvi * P0_ice)
@@ -1470,8 +1470,8 @@ contains
     real(kind=dp) :: RH, es, ei, T, e, Rv
     T = env_state%temp
     RH = env_state%rel_humid
-    es = env_state_saturated_vapor_pressure_water_2(T)
-    ei = env_state_saturated_vapor_pressure_ice(T)
+    es = env_state_saturated_vapor_pressure_wrt_water_2(T)
+    ei = env_state_saturated_vapor_pressure_wrt_ice(T)
     e = es * RH
     Rv = const%univ_gas_const / const%water_molec_weight
     condense_saved_ice_supersat_density = (e - ei) / (Rv * T) * 1000d0
@@ -1637,8 +1637,8 @@ contains
     real(kind=dp), intent(in) :: T, rel_humid
     real(kind=dp) :: si, P0, P0_ice, P_vapor
 
-    P0 = env_state_saturated_vapor_pressure_water_2(T)
-    P0_ice = env_state_saturated_vapor_pressure_ice(T)
+    P0 = env_state_saturated_vapor_pressure_wrt_water_2(T)
+    P0_ice = env_state_saturated_vapor_pressure_wrt_ice(T)
     P_vapor = rel_humid * P0
     si = (P_vapor - P0_ice) / (P0 - P0_ice)
     
@@ -1713,8 +1713,8 @@ contains
     real(kind=dp) :: si, P0, P0_ice, P_vapor
     integer :: i_si
 
-    P0 = env_state_saturated_vapor_pressure_water_2(env_state%temp)
-    P0_ice = env_state_saturated_vapor_pressure_ice(env_state%temp)
+    P0 = env_state_saturated_vapor_pressure_wrt_water_2(env_state%temp)
+    P0_ice = env_state_saturated_vapor_pressure_wrt_ice(env_state%temp)
     P_vapor = env_state%rel_humid * P0
     si = (P_vapor - P0_ice) / (P0 - P0_ice)
     i_si = condense_pokrifka_find_nearest_si_index(si)
