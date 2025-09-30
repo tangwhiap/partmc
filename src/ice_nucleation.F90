@@ -88,6 +88,27 @@ contains
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+  subroutine ice_nucleation_homogeneous_freezing(aero_state, aero_data, &
+       env_state, del_t)
+
+    !> Aerosol state.
+    type(aero_state_t), intent(inout) :: aero_state
+    !> Aerosol data.
+    type(aero_data_t), intent(in) :: aero_data
+    !> Environment state.
+    type(env_state_t), intent(inout) :: env_state
+    !> Total time to integrate.
+    real(kind=dp), intent(in) :: del_t
+
+     if (env_state%temp <= const%water_homo_freeze_temp) then
+         print*, "Homogeneous freezing"
+         call ice_nucleation_homogeneous_freezing_time_dependent_naive( &
+              aero_state, aero_data, env_state, del_t)
+     end if
+  end subroutine ice_nucleation_homogeneous_freezing
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
   !> Initialization for the sigular scheme, sampling the freezing temperature
   !> for each particles.
   subroutine ice_nucleation_singular_initialize(aero_state, aero_data, &
@@ -349,6 +370,64 @@ contains
   end subroutine ice_nucleation_immersion_freezing_time_dependent_naive
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  !> Simulation for homogeneous freezingtime-dependent scheme (e.g., Koop),
+  !> deciding whether to freeze for each particle. Run in each time step.
+  !> This subroutine applies the naive algorithm that checks each particle.
+  subroutine ice_nucleation_homogeneous_freezing_time_dependent_naive( &
+       aero_state, aero_data, env_state, del_t)
+
+    !> Aerosol state.
+    type(aero_state_t), intent(inout) :: aero_state
+    !> Aerosol data.
+    type(aero_data_t), intent(in) :: aero_data
+    !> Environment state.
+    type(env_state_t), intent(inout) :: env_state
+    !> Total time to integrate.
+    real(kind=dp), intent(in) :: del_t
+
+    integer :: i_part
+    real(kind=dp) :: a_w_ice, pis, pvs
+    real(kind=dp) :: p_freeze = 0
+    real(kind=dp), allocatable :: H2O_masses(:), total_masses(:), &
+         H2O_frac(:)
+    real(kind=dp) :: rand
+
+
+    ! FIXME: Do this to avoid compiler warning/error, fix it in the future.
+    allocate(total_masses(aero_state_n_part(aero_state)))
+    allocate(H2O_masses(aero_state_n_part(aero_state)))
+    allocate(H2O_frac(aero_state_n_part(aero_state)))
+
+    total_masses = aero_state_masses(aero_state, aero_data)
+    H2O_masses = aero_state_masses(aero_state, aero_data, include=["H2O"])
+    H2O_frac = H2O_masses / total_masses
+
+    pvs = env_state_saturated_vapor_pressure_wrt_water(env_state%temp)
+    pis = env_state_saturated_vapor_pressure_wrt_ice(env_state%temp)
+    a_w_ice = pis / pvs
+
+    do i_part = 1, aero_state_n_part(aero_state)
+       if (aero_state%apa%particle(i_part)%frozen) cycle
+       if (H2O_frac(i_part) < const%homof_water_threshold) cycle
+       rand = pmc_random()
+
+       p_freeze = Homo_Koop_Pfrz_particle(aero_state%apa%particle(i_part), &
+            aero_data, a_w_ice, del_t)
+
+       if (rand < p_freeze) then
+          aero_state%apa%particle(i_part)%frozen = .TRUE.
+          aero_state%apa%particle(i_part)%den_ice = &
+               const%reference_ice_density
+          aero_state%apa%particle(i_part)%ice_shape_phi = 1d0
+       end if
+    end do
+
+    deallocate(total_masses)
+    deallocate(H2O_masses)
+    deallocate(H2O_frac)
+
+  end subroutine ice_nucleation_homogeneous_freezing_time_dependent_naive
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
   !> Simulates melting: if the environmental temperature is above the freezing
   !> temperature of water, all particles are set to be unfrozen.
@@ -475,6 +554,51 @@ contains
     ABIFM_Pfrz_max = 1 - exp(-j_het_max * immersed_surface_area  * del_t)
 
   end function ABIFM_Pfrz_max
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  !> Calculating the homogeneous freezing probability for the particle (i_part)
+  !> (Koop et al.,2000)
+  real(kind=dp) function Homo_Koop_Pfrz_particle(aero_particle, aero_data, &
+       a_w_ice, del_t)
+
+    !> Aerosol particle.
+    type(aero_particle_t), intent(in) :: aero_particle
+    !> Aerosol data.
+    type(aero_data_t), intent(in) :: aero_data
+    !> The water activity w.r.t. ice.
+    real(kind=dp), intent(in) :: a_w_ice
+    !> Time interval.
+    real(kind=dp), intent(in) :: del_t
+
+    real(kind=dp) :: wet_volume, dry_volume, water_volume, water_volume2
+    real(kind=dp) :: delta_aw
+    real(kind=dp) :: log10_j_hom, j_hom
+
+
+    wet_volume = aero_particle_volume(aero_particle)
+    dry_volume = aero_particle_dry_volume(aero_particle, aero_data)
+    water_volume = wet_volume - dry_volume
+    water_volume2 = aero_particle%vol(aero_data%i_water)
+    delta_aw = 1 - a_w_ice
+
+    if (water_volume .lt. 0) then
+        print*, "Warning! water_volume < 0."
+    end if
+    log10_j_hom = -906.7 + (8502.0*delta_aw) &
+                - (26924.0*delta_aw*delta_aw) &
+                + (29180.0*delta_aw*delta_aw*delta_aw) ! cm-3 s-1
+    j_hom = (10**log10_j_hom) * 1e6 ! m-3 s-1
+
+    Homo_Koop_Pfrz_particle = 1 - exp(-water_volume * j_hom * del_t)
+
+    if (Homo_Koop_Pfrz_particle .gt. 1) then
+        print*, "Warning! Pfrz > 1"
+    else if (Homo_Koop_Pfrz_particle .lt. 0) then
+        print*, "Warning! Pfrz < 0"
+    end if
+
+  end function Homo_Koop_Pfrz_particle
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 

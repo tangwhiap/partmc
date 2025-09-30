@@ -82,6 +82,8 @@ module pmc_run_part
      !> Whether to use the naive algorithm for time-dependent scheme.
      !> (If false, use the binned tau-leaping algorithm.)
      logical :: do_freezing_naive
+     !> Wheter to do homogeneous freezing.
+     logical :: do_homogeneous_freezing
 
      !> Whether to simulation ice shape variation
      logical :: do_ice_shape = .false.
@@ -359,6 +361,11 @@ contains
          + pmc_mpi_pack_size_real(val%INAS_b) &
          + pmc_mpi_pack_size_real(val%freezing_rate) &
          + pmc_mpi_pack_size_logical(val%do_freezing_naive) &
+         + pmc_mpi_pack_size_logical(val%do_homogeneous_freezing) &
+         + pmc_mpi_pack_size_logical(val%do_ice_shape) &
+         + pmc_mpi_pack_size_logical(val%do_ice_density) &
+         + pmc_mpi_pack_size_integer(val%ice_dep_density_scheme_type) &
+         + pmc_mpi_pack_size_logical(val%do_ice_ventilation) &
          + pmc_mpi_pack_size_logical(val%allow_doubling) &
          + pmc_mpi_pack_size_logical(val%allow_halving) &
          + pmc_mpi_pack_size_logical(val%do_condensation) &
@@ -418,6 +425,11 @@ contains
     call pmc_mpi_pack_real(buffer, position, val%INAS_b)
     call pmc_mpi_pack_real(buffer, position, val%freezing_rate)
     call pmc_mpi_pack_logical(buffer, position, val%do_freezing_naive)
+    call pmc_mpi_pack_logical(buffer, position, val%do_homogeneous_freezing)
+    call pmc_mpi_pack_logical(buffer, position, val%do_ice_shape)
+    call pmc_mpi_pack_logical(buffer, position, val%do_ice_density)
+    call pmc_mpi_pack_integer(buffer, position, val%ice_dep_density_scheme_type)
+    call pmc_mpi_pack_logical(buffer, position, val%do_ice_ventilation)
     call pmc_mpi_pack_logical(buffer, position, val%allow_doubling)
     call pmc_mpi_pack_logical(buffer, position, val%allow_halving)
     call pmc_mpi_pack_logical(buffer, position, val%do_condensation)
@@ -478,6 +490,11 @@ contains
     call pmc_mpi_unpack_real(buffer, position, val%INAS_b)
     call pmc_mpi_unpack_real(buffer, position, val%freezing_rate)
     call pmc_mpi_unpack_logical(buffer, position, val%do_freezing_naive)
+    call pmc_mpi_unpack_logical(buffer, position, val%do_homogeneous_freezing)
+    call pmc_mpi_unpack_logical(buffer, position, val%do_ice_shape)
+    call pmc_mpi_unpack_logical(buffer, position, val%do_ice_density)
+    call pmc_mpi_unpack_integer(buffer, position, val%ice_dep_density_scheme_type)
+    call pmc_mpi_unpack_logical(buffer, position, val%do_ice_ventilation)
     call pmc_mpi_unpack_logical(buffer, position, val%allow_doubling)
     call pmc_mpi_unpack_logical(buffer, position, val%allow_halving)
     call pmc_mpi_unpack_logical(buffer, position, val%do_condensation)
@@ -760,7 +777,12 @@ contains
        endif
        
     endif
-    if (run_part_opt%do_immersion_freezing .and. run_part_opt%do_condensation) then 
+    call spec_file_read_logical(file, 'do_homogeneous_freezing', &
+           run_part_opt%do_homogeneous_freezing)
+
+    if ((run_part_opt%do_immersion_freezing &
+        .or. run_part_opt%do_homogeneous_freezing) &
+        .and. run_part_opt%do_condensation) then 
        call spec_file_read_logical(file, 'do_ice_shape', &
             run_part_opt%do_ice_shape)
        call spec_file_read_logical(file, 'do_ice_density', &
@@ -946,6 +968,13 @@ contains
        call ice_nucleation_immersion_freezing(aero_state, aero_data, env_state, &
             run_part_opt%del_t, run_part_opt%immersion_freezing_scheme_type, &
             run_part_opt%freezing_rate, run_part_opt%do_freezing_naive)
+    end if
+    if (run_part_opt%do_homogeneous_freezing) then
+       call ice_nucleation_homogeneous_freezing(aero_state, aero_data, env_state, &
+            run_part_opt%del_t)
+    end if
+    if (run_part_opt%do_immersion_freezing &
+         .or. run_part_opt%do_homogeneous_freezing) then
        call ice_nucleation_melting(aero_state, aero_data, env_state)
     end if
     if (run_part_opt%do_coagulation) then
