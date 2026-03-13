@@ -61,7 +61,8 @@ contains
             !"Dp_dry=", aero_particle_dry_diameter(aero_state%apa%particle(1), &
             !        aero_data), &
 
-    if (env_state%temp <= const%water_freeze_temp) then
+    !if (env_state%temp <= const%water_freeze_temp) then
+    if (.true.) then
        if ((immersion_freezing_scheme_type == IMMERSION_FREEZING_SCHEME_ABIFM) &
             .OR. (immersion_freezing_scheme_type == IMMERSION_FREEZING_SCHEME_CONST)) then
           if (do_freezing_naive) then
@@ -101,7 +102,6 @@ contains
     real(kind=dp), intent(in) :: del_t
 
      if (env_state%temp <= const%water_homo_freeze_temp) then
-         print*, "Homogeneous freezing"
          call ice_nucleation_homogeneous_freezing_time_dependent_naive( &
               aero_state, aero_data, env_state, del_t)
      end if
@@ -166,7 +166,9 @@ contains
        if (aero_state%apa%particle(i_part)%frozen) then
           cycle
        end if
-       if (H2O_frac(i_part) < const%imf_water_threshold) then
+       !if (H2O_frac(i_part) < const%imf_water_threshold) then
+       if (.not. immersion_freezing_water_criteria( &
+            aero_state%apa%particle(i_part), aero_data)) then
           cycle
        end if
        if (env_state%temp <= &
@@ -264,7 +266,9 @@ contains
              if (aero_state%apa%particle(i_part)%frozen) then
                 cycle
              end if
-             if (H2O_frac(i_part) < const%imf_water_threshold) then
+             !if (H2O_frac(i_part) < const%imf_water_threshold) then
+             if (.not. immersion_freezing_water_criteria( &
+                  aero_state%apa%particle(i_part), aero_data)) then
                 cycle
              end if
              if (immersion_freezing_scheme_type == &
@@ -343,7 +347,11 @@ contains
 
     do i_part = 1, aero_state_n_part(aero_state)
        if (aero_state%apa%particle(i_part)%frozen) cycle
-       if (H2O_frac(i_part) < const%imf_water_threshold) cycle
+      ! if (H2O_frac(i_part) < const%imf_water_threshold) cycle
+       if (.not. immersion_freezing_water_criteria( &
+            aero_state%apa%particle(i_part), aero_data)) then
+          cycle
+       end if
        rand = pmc_random()
 
        if (immersion_freezing_scheme_type == &
@@ -408,7 +416,11 @@ contains
 
     do i_part = 1, aero_state_n_part(aero_state)
        if (aero_state%apa%particle(i_part)%frozen) cycle
-       if (H2O_frac(i_part) < const%homof_water_threshold) cycle
+       !if (H2O_frac(i_part) < const%homof_water_threshold) cycle
+       if (.not. immersion_freezing_water_criteria( &
+            aero_state%apa%particle(i_part), aero_data)) then
+          cycle
+       end if
        rand = pmc_random()
 
        p_freeze = Homo_Koop_Pfrz_particle(aero_state%apa%particle(i_part), &
@@ -599,6 +611,26 @@ contains
     end if
 
   end function Homo_Koop_Pfrz_particle
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  !> Whether the water content of a particle meets criteria of immersion freezing
+  logical function immersion_freezing_water_criteria(aero_particle, aero_data)
+      !> Aerosol particle.
+    type(aero_particle_t), intent(in) :: aero_particle
+    !> Aerosol data.
+    type(aero_data_t), intent(in) :: aero_data
+
+    real(kind=dp) :: volume, dry_volume, water_volume
+    real(kind=dp) :: alpha_cw = 70 ! (Adapted from Simpson et al., 2018)
+    
+    volume = aero_particle_volume(aero_particle)
+    dry_volume = aero_particle_dry_volume(aero_particle, aero_data)
+    water_volume = volume - dry_volume
+    immersion_freezing_water_criteria = water_volume .ge. alpha_cw * dry_volume
+    
+
+  end function immersion_freezing_water_criteria
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 

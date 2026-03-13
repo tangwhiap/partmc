@@ -818,9 +818,9 @@ contains
             * exp(W * delta_star / (1d0 + delta_star) &
             + (X / inputs%D) / (1d0 + delta_star))
     end do
-    !call warn_assert_msg(387362320, &
-    !     abs(h) < 1d3 * epsilon(1d0) * abs(U * V * D_vp * inputs%H), &
-    !     "condensation newton loop did not satisfy convergence tolerance")
+    call warn_assert_msg(387362320, &
+         abs(h) < 1d3 * epsilon(1d0) * abs(U * V * D_vp * inputs%H), &
+         "condensation newton loop did not satisfy convergence tolerance")
 
     !print*, abs(h) - 1d3 * epsilon(1d0) * abs(U * V * D_vp * inputs%H)
     !if (.not. (abs(h) < 1d3 * epsilon(1d0) * abs(U * V * D_vp * inputs%H))) then
@@ -962,7 +962,7 @@ contains
         !print*, dRdot_dR
         dRdot_dH = P0 / P0_ice * Cap / (R**2 * spec_den * G)
         !dHdoti_dR = 0d0
-        dHdoti_dR = -(Rv * inputs%p) / (P0_ice * Rd) / rho_air * 4 * const%pi * &
+        dHdoti_dR = -(Rv * inputs%p) / (P0 * Rd) / rho_air * 4 * const%pi * &
             spec_den / inputs%V_comp * ( 2 * R * Rdot + R**2 * dRdot_dR)
         !dHdoti_dH = -4*const%pi*R**2 *inputs%den_ice/inputs%V_comp/rho_air *&
         !    (Lv*Ls/(Rv*inputs%T**2*const%air_spec_heat)*Rdot + &
@@ -989,7 +989,10 @@ contains
         !print*, "Ls=",Ls,"Rv=",Rv,"k_a=",k_a,"D_v=", D_v,&
         !    "dR=",outputs%Ddot/2,"Cap/R=", Cap/R,"gtp=",G**(-1d0), &
         !    "si=",(inputs%H * P0 / P0_ice - 1d0),"RhoDep=",spec_den,&
-        !    "R=", R
+        !    "R=", R, "T=", inputs%T, "es=", P0, "ei=", P0_ice,&
+        !    "MRii_dot=", MRii_dot, "Hdot_i=", Hdot_i, "V_comp=", inputs%V_comp,&
+        !    "Rd=", Rd, "Rv*p/(es*Rd)=", Rv * inputs%p / (P0 *  Rd)
+        !print*, "----------------"
 
     end if
 
@@ -1088,6 +1091,7 @@ contains
            Hdot = Hdot + outputs_ice%Hdot_i
        end if
     end do
+    !print*, "Hdot=", Hdot
     ! TangWenhan
     if (condense_saved_frozen(n_eqn - 1)) then  
         !print*, "frozen4"
@@ -1313,6 +1317,7 @@ contains
          aero_particle_solute_volume(aero_particle, &
          aero_data))
 
+    !print*, "---------------------------"
     D = D_dry
     g = 0d0
     dg_dD = 1d0
@@ -1323,9 +1328,12 @@ contains
             / (D**3 + (kappa - 1d0) * D_dry**3)**2
        g = env_state%rel_humid - a_w * exp(X / D)
        dg_dD = - daw_dD * exp(X / D) + a_w * exp(X / D) * (X / D**2)
+       !print*, newton_step, "D=", D, "a_w=", a_w, "daw_dD=", daw_dD, "g=", g, "dg_dD=", dg_dD
+       !print*, "T=", env_state%temp, "RH=", env_state%rel_humid
     end do
     call warn_assert_msg(426620001, abs(g) < 1d3 * epsilon(1d0), &
          "convergence problem in equilibration")
+    !print*, a_w, X, D, exp(X / D), env_state%rel_humid - a_w * exp(X / D)
 
     aero_particle%vol(aero_data%i_water) = aero_data_diam2vol(aero_Data, D) &
          - aero_data_diam2vol(aero_data, D_dry)
