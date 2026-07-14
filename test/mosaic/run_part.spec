@@ -42,6 +42,7 @@ do_mosaic yes                   # whether to do MOSAIC (yes/no)
 do_optical yes                  # whether to compute optical props (yes/no)
 do_nucleation no                # whether to do nucleation (yes/no)
 do_immersion_freezing no        # whether to do freezing (yes/no)
+do_homogeneous_freezing no      # whether to do homogeneous freezing (yes/no)
 
 rand_init 0                     # random initialization (0 to auto-generate)
 allow_doubling yes              # whether to allow doubling (yes/no)

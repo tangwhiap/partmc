@@ -42,6 +42,7 @@ do_mosaic no                    # whether to do MOSAIC (yes/no)
 do_nucleation yes               # whether to do nucleation (yes/no)
 nucleate sulf_acid              # nucleation parameterization
 do_immersion_freezing no        # whether to do freezing (yes/no)
+do_homogeneous_freezing no      # whether to do homogeneous freezing (yes/no)
 
 rand_init 0                     # random initialization (0 to auto-generate)
 allow_doubling no               # whether to allow doubling (yes/no)

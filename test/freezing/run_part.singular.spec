@@ -46,6 +46,7 @@ do_immersion_freezing yes                 # whether to do freezing (yes/no)
 immersion_freezing_scheme singular
 INAS_a -0.517
 INAS_b 8.934
+do_homogeneous_freezing no      # whether to do homogeneous freezing (yes/no)
 
 rand_init 0                     # random initialization (0 to auto-generate)
 allow_doubling yes              # whether to allow doubling (yes/no)
