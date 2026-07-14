@@ -26,6 +26,8 @@ module pmc_aero_info
   !> Particle was removed due to adjustments in the particle's
   !> weighting function.
   integer, parameter :: AERO_INFO_WEIGHT = 4
+  !> Particle was removed due to extreme ice aspect ratio.
+  integer, parameter :: AERO_INFO_ICE_SHAPE = 5
 
   !> Information about removed particles describing the sink.
   !!

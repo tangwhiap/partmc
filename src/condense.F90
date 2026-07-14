@@ -34,6 +34,7 @@ module pmc_condense
   use pmc_util
   use pmc_aero_particle
   use pmc_constants
+  use pmc_aero_info
 #ifdef PMC_USE_SUNDIALS
   use iso_c_binding
 #endif
@@ -66,6 +67,8 @@ module pmc_condense
   integer, parameter :: CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_CTL = 2
   integer, parameter :: CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_LOCAL = 3
   integer, parameter :: CONDENSE_ICE_DEP_DENSITY_SCHEME_POKRIFKA_FIX = 4
+  real(kind=dp), parameter :: CONDENSE_ICE_SHAPE_PHI_MIN = 0.1d0
+  real(kind=dp), parameter :: CONDENSE_ICE_SHAPE_PHI_MAX = 10d0
   
   integer, parameter :: CONDENSE_GAMMA_DIMENSION = 60
   integer, parameter :: CONDENSE_POKRIFKA_SI_DIMENSION = 100
@@ -263,7 +266,8 @@ contains
   !> water vapor.
   subroutine condense_particles(aero_state, aero_data, env_state_initial, &
        env_state_final, del_t, do_ice_shape, do_ice_density, &
-       do_ice_ventilation, ice_dep_density_scheme_type)
+       do_ice_ventilation, ice_dep_density_scheme_type, &
+       do_ice_shape_removal, record_removals)
 
     !> Aerosol state.
     type(aero_state_t), intent(inout) :: aero_state
@@ -281,6 +285,8 @@ contains
     logical, intent(in) :: do_ice_density
     logical, intent(in) :: do_ice_ventilation
     integer, intent(in) :: ice_dep_density_scheme_type
+    logical, intent(in) :: do_ice_shape_removal
+    logical, intent(in) :: record_removals
     real(kind=dp) :: P0
 
     integer :: i_part, n_eqn, i_eqn
@@ -637,6 +643,10 @@ contains
     call warn_assert_msg(477865387, abs(water_rel_error) < 1d-6, &
          "condensation water imbalance too high: " &
          // trim(real_to_string(water_rel_error)))
+
+    if (do_ice_shape_removal) then
+       call condense_remove_extreme_ice_shapes(aero_state, record_removals)
+    end if
 
     
 
@@ -1855,6 +1865,33 @@ contains
   end subroutine condense_ice_ventilation
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  subroutine condense_remove_extreme_ice_shapes(aero_state, record_removals)
+
+    type(aero_state_t), intent(inout) :: aero_state
+    logical, intent(in) :: record_removals
+
+    integer :: i_part
+    type(aero_info_t) :: aero_info
+
+    do i_part = aero_state_n_part(aero_state),1,-1
+       if (.not. aero_state%apa%particle(i_part)%frozen) cycle
+       if (aero_state%apa%particle(i_part)%ice_shape_phi > &
+            CONDENSE_ICE_SHAPE_PHI_MAX .or. &
+            aero_state%apa%particle(i_part)%ice_shape_phi < &
+            CONDENSE_ICE_SHAPE_PHI_MIN) then
+          aero_info%id = aero_state%apa%particle(i_part)%id
+          aero_info%action = AERO_INFO_ICE_SHAPE
+          aero_info%other_id = 0
+          call aero_state_remove_particle(aero_state, i_part, &
+               record_removals, aero_info)
+       end if
+    end do
+
+  end subroutine condense_remove_extreme_ice_shapes
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
   !> Read the specification for a kernel type from a spec file and
   !> generate it.
   subroutine spec_file_read_ice_dep_density_scheme_type(file, ice_dep_density_scheme_type)
@@ -1904,4 +1941,3 @@ contains
 
 
 end module pmc_condense
-

@@ -85,6 +85,8 @@ module pmc_run_part
 
      !> Whether to simulation ice shape variation
      logical :: do_ice_shape = .false.
+     !> Whether to remove ice particles with extreme aspect ratio.
+     logical :: do_ice_shape_removal = .false.
      !> Whether to simulation ice density variation
      logical :: do_ice_density = .false.
      !> The ice deposition density scheme.
@@ -361,6 +363,7 @@ contains
          + pmc_mpi_pack_size_logical(val%do_freezing_naive) &
          + pmc_mpi_pack_size_logical(val%do_homogeneous_freezing) &
          + pmc_mpi_pack_size_logical(val%do_ice_shape) &
+         + pmc_mpi_pack_size_logical(val%do_ice_shape_removal) &
          + pmc_mpi_pack_size_logical(val%do_ice_density) &
          + pmc_mpi_pack_size_integer(val%ice_dep_density_scheme_type) &
          + pmc_mpi_pack_size_logical(val%do_ice_ventilation) &
@@ -425,6 +428,7 @@ contains
     call pmc_mpi_pack_logical(buffer, position, val%do_freezing_naive)
     call pmc_mpi_pack_logical(buffer, position, val%do_homogeneous_freezing)
     call pmc_mpi_pack_logical(buffer, position, val%do_ice_shape)
+    call pmc_mpi_pack_logical(buffer, position, val%do_ice_shape_removal)
     call pmc_mpi_pack_logical(buffer, position, val%do_ice_density)
     call pmc_mpi_pack_integer(buffer, position, val%ice_dep_density_scheme_type)
     call pmc_mpi_pack_logical(buffer, position, val%do_ice_ventilation)
@@ -490,6 +494,7 @@ contains
     call pmc_mpi_unpack_logical(buffer, position, val%do_freezing_naive)
     call pmc_mpi_unpack_logical(buffer, position, val%do_homogeneous_freezing)
     call pmc_mpi_unpack_logical(buffer, position, val%do_ice_shape)
+    call pmc_mpi_unpack_logical(buffer, position, val%do_ice_shape_removal)
     call pmc_mpi_unpack_logical(buffer, position, val%do_ice_density)
     call pmc_mpi_unpack_integer(buffer, position, val%ice_dep_density_scheme_type)
     call pmc_mpi_unpack_logical(buffer, position, val%do_ice_ventilation)
@@ -783,6 +788,13 @@ contains
         .and. run_part_opt%do_condensation) then 
        call spec_file_read_logical(file, 'do_ice_shape', &
             run_part_opt%do_ice_shape)
+       call spec_file_read_logical(file, 'do_ice_shape_removal', &
+            run_part_opt%do_ice_shape_removal)
+       if (run_part_opt%do_ice_shape_removal .and. &
+            (.not. run_part_opt%do_ice_shape)) then
+          call spec_file_die_msg(901662241, file, &
+               'do_ice_shape_removal requires do_ice_shape')
+       endif
        call spec_file_read_logical(file, 'do_ice_density', &
             run_part_opt%do_ice_density)
        if (run_part_opt%do_ice_density) then
@@ -791,6 +803,8 @@ contains
        endif
        call spec_file_read_logical(file, 'do_ice_ventilation', &
             run_part_opt%do_ice_ventilation)
+    else
+       run_part_opt%do_ice_shape_removal = .false.
     endif
 
     call spec_file_read_integer(file, 'rand_init', rand_init)
@@ -997,7 +1011,8 @@ contains
         call condense_particles(aero_state, aero_data, old_env_state, &
              env_state, run_part_opt%del_t, run_part_opt%do_ice_shape, &
              run_part_opt%do_ice_density, run_part_opt%do_ice_ventilation, &
-             run_part_opt%ice_dep_density_scheme_type)
+             run_part_opt%ice_dep_density_scheme_type, &
+             run_part_opt%do_ice_shape_removal, run_part_opt%record_removals)
     end if
 #endif
 
