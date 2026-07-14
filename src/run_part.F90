@@ -27,13 +27,11 @@ module pmc_run_part
   use pmc_camp_interface
   use pmc_photolysis
   use pmc_tchem_interface
+  use pmc_condense
 #ifdef PMC_USE_CAMP
   use camp_camp_core
   use camp_camp_state
   use camp_env_state, only: camp_env_state_t => env_state_t
-#endif
-#ifdef PMC_USE_SUNDIALS
-  use pmc_condense
 #endif
 #ifdef PMC_USE_MPI
   use mpi
