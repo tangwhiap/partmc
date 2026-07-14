@@ -114,7 +114,7 @@ contains
     aero_particle_to%ice_shape_phi = aero_particle_from%ice_shape_phi
     aero_particle_to%depden = aero_particle_from%depden
     call move_alloc(aero_particle_from%depden_func, &
-            aero_particle_to%depden_func)
+         aero_particle_to%depden_func)
     aero_particle_to%n_primary_parts = aero_particle_from%n_primary_parts
 
   end subroutine aero_particle_shift
@@ -940,7 +940,7 @@ contains
     real(kind=dp) :: ice_vol_1, ice_vol_2
     integer :: n_comp_1, n_comp_2, n_comp_1_new, n_comp_2_new, i
     type(aero_component_t), allocatable :: new_aero_component(:)
-    integer :: n_swbands, n_depden_func
+    integer :: n_swbands
     integer, allocatable :: sample(:)
 
     call assert(203741686, size(aero_particle_1%vol) &
@@ -955,8 +955,6 @@ contains
     call ensure_real_array_size(aero_particle_new%asymmetry, n_swbands)
     call ensure_complex_array_size(aero_particle_new%refract_shell, n_swbands)
     call ensure_complex_array_size(aero_particle_new%refract_core, n_swbands)
-    n_depden_func = size(aero_particle_1%depden_func)
-    call ensure_real_array_size(aero_particle_new%depden_func, n_depden_func)
     aero_particle_new%absorb_cross_sect = 0d0
     aero_particle_new%scatter_cross_sect = 0d0
     aero_particle_new%asymmetry = 0d0
@@ -1037,19 +1035,16 @@ contains
     else
        aero_particle_new%den_ice = const%nan
     end if
-    aero_particle_new%depden = (aero_particle_1%depden + &
-         aero_particle_2%depden) / 2d0
-
-    do i = 1, 100
-       !print*, aero_particle_1%depden_func(i), aero_particle_2%depden_func(i)
-       aero_particle_new%depden_func(i) = (aero_particle_1%depden_func(i) + &
-            aero_particle_2%depden_func(i)) / 2d0
-       !aero_particle_new%depden_func(i) = const%nan
-    end do
 
 
     aero_particle_new%n_primary_parts = aero_particle_1%n_primary_parts &
          + aero_particle_2%n_primary_parts
+    aero_particle_new%depden = (aero_particle_1%depden + &
+         aero_particle_2%depden) / 2d0
+    call ensure_real_array_size(aero_particle_new%depden_func, &
+         size(aero_particle_1%depden_func))
+    aero_particle_new%depden_func = (aero_particle_1%depden_func + &
+         aero_particle_2%depden_func) / 2d0
 
   end subroutine aero_particle_coagulate
 

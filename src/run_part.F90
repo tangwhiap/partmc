@@ -72,27 +72,26 @@ module pmc_run_part
      logical :: do_immersion_freezing
      !> The immersion freezing scheme options.
      integer :: immersion_freezing_scheme_type
-     !> The INAS parameters for "singular" scheme.
+     !> Slope parameter for the INAS parameterization (singular scheme only).
      real(kind=dp) :: INAS_a
+     !> Intercept parameter for the INAS parameterization (singular scheme only).
      real(kind=dp) :: INAS_b
      !> The freezing rate parameter for "const" scheme.
      real(kind=dp) :: freezing_rate
      !> Whether to use the naive algorithm for time-dependent scheme.
      !> (If false, use the binned tau-leaping algorithm.)
      logical :: do_freezing_naive
-     !> Wheter to do homogeneous freezing.
+     !> Whether to perform homogeneous freezing.
      logical :: do_homogeneous_freezing
-
-     !> Whether to simulation ice shape variation
+     !> Whether to simulate ice-shape variation.
      logical :: do_ice_shape = .false.
      !> Whether to remove ice particles with extreme aspect ratio.
      logical :: do_ice_shape_removal = .false.
-     !> Whether to simulation ice density variation
+     !> Whether to simulate ice-density variation.
      logical :: do_ice_density = .false.
-     !> The ice deposition density scheme.
+     !> Ice deposition-density scheme.
      integer :: ice_dep_density_scheme_type
-     !> Whether to simulation ventilation effect
-     !> for ice growth.
+     !> Whether to simulate ice-growth ventilation effects.
      logical :: do_ice_ventilation = .false.
      !> Allow doubling if needed.
      logical :: allow_doubling
@@ -257,13 +256,7 @@ contains
        call print_part_progress(run_part_opt%i_repeat, time, &
             global_n_part, 0, 0, 0, 0, 0, t_wall_elapsed, t_wall_remain)
     end if
-    ! initialize the immersion freezing temperature for Singular scheme
-    if (run_part_opt%do_immersion_freezing .and. &
-         (run_part_opt%immersion_freezing_scheme_type .eq. &
-         IMMERSION_FREEZING_SCHEME_SINGULAR)) then
-       call ice_nucleation_singular_initialize(aero_state, aero_data, &
-               run_part_opt%INAS_a, run_part_opt%INAS_b)
-    end if
+
     if (run_part_opt%do_immersion_freezing .and. &
          run_part_opt%do_condensation .and. &
          run_part_opt%do_ice_density .and. &
@@ -762,7 +755,7 @@ contains
             IMMERSION_FREEZING_SCHEME_CONST) then
           call spec_file_read_real(file, 'freezing_rate', &
                run_part_opt%freezing_rate)
-       endif
+       end if
 
        if ((run_part_opt%immersion_freezing_scheme_type .eq. &
             IMMERSION_FREEZING_SCHEME_ABIFM) .or. &
@@ -770,22 +763,22 @@ contains
             IMMERSION_FREEZING_SCHEME_CONST)) then
           call spec_file_read_logical(file, 'do_freezing_naive', &
                run_part_opt%do_freezing_naive)
-       endif
+       end if
           
 
        if (run_part_opt%immersion_freezing_scheme_type .eq.&
             IMMERSION_FREEZING_SCHEME_SINGULAR) then
           call spec_file_read_real(file, 'INAS_a', run_part_opt%INAS_a)
           call spec_file_read_real(file, 'INAS_b', run_part_opt%INAS_b)
-       endif
+       end if
        
-    endif
-    call spec_file_read_logical(file, 'do_homogeneous_freezing', &
-           run_part_opt%do_homogeneous_freezing)
+    end if
 
-    if ((run_part_opt%do_immersion_freezing &
-        .or. run_part_opt%do_homogeneous_freezing) &
-        .and. run_part_opt%do_condensation) then 
+    call spec_file_read_logical(file, 'do_homogeneous_freezing', &
+         run_part_opt%do_homogeneous_freezing)
+    if ((run_part_opt%do_immersion_freezing .or. &
+         run_part_opt%do_homogeneous_freezing) .and. &
+         run_part_opt%do_condensation) then
        call spec_file_read_logical(file, 'do_ice_shape', &
             run_part_opt%do_ice_shape)
        call spec_file_read_logical(file, 'do_ice_shape_removal', &
@@ -794,18 +787,18 @@ contains
             (.not. run_part_opt%do_ice_shape)) then
           call spec_file_die_msg(901662241, file, &
                'do_ice_shape_removal requires do_ice_shape')
-       endif
+       end if
        call spec_file_read_logical(file, 'do_ice_density', &
             run_part_opt%do_ice_density)
        if (run_part_opt%do_ice_density) then
           call spec_file_read_ice_dep_density_scheme_type(file, &
                run_part_opt%ice_dep_density_scheme_type)
-       endif
+       end if
        call spec_file_read_logical(file, 'do_ice_ventilation', &
             run_part_opt%do_ice_ventilation)
     else
        run_part_opt%do_ice_shape_removal = .false.
-    endif
+    end if
 
     call spec_file_read_integer(file, 'rand_init', rand_init)
     call spec_file_read_logical(file, 'allow_doubling', &
@@ -979,14 +972,15 @@ contains
     if (run_part_opt%do_immersion_freezing) then
        call ice_nucleation_immersion_freezing(aero_state, aero_data, env_state, &
             run_part_opt%del_t, run_part_opt%immersion_freezing_scheme_type, &
-            run_part_opt%freezing_rate, run_part_opt%do_freezing_naive)
+            run_part_opt%freezing_rate, run_part_opt%do_freezing_naive, &
+            run_part_opt%INAS_a, run_part_opt%INAS_b)
     end if
     if (run_part_opt%do_homogeneous_freezing) then
-       call ice_nucleation_homogeneous_freezing(aero_state, aero_data, env_state, &
-            run_part_opt%del_t)
+       call ice_nucleation_homogeneous_freezing(aero_state, aero_data, &
+            env_state, run_part_opt%del_t)
     end if
-    if (run_part_opt%do_immersion_freezing &
-         .or. run_part_opt%do_homogeneous_freezing) then
+    if (run_part_opt%do_immersion_freezing .or. &
+         run_part_opt%do_homogeneous_freezing) then
        call ice_nucleation_melting(aero_state, aero_data, env_state)
     end if
     if (run_part_opt%do_coagulation) then
@@ -1008,11 +1002,11 @@ contains
 
 #ifdef PMC_USE_SUNDIALS
     if (run_part_opt%do_condensation) then
-        call condense_particles(aero_state, aero_data, old_env_state, &
-             env_state, run_part_opt%del_t, run_part_opt%do_ice_shape, &
-             run_part_opt%do_ice_density, run_part_opt%do_ice_ventilation, &
-             run_part_opt%ice_dep_density_scheme_type, &
-             run_part_opt%do_ice_shape_removal, run_part_opt%record_removals)
+       call condense_particles(aero_state, aero_data, old_env_state, &
+            env_state, run_part_opt%del_t, run_part_opt%do_ice_shape, &
+            run_part_opt%do_ice_density, run_part_opt%do_ice_ventilation, &
+            run_part_opt%ice_dep_density_scheme_type, &
+            run_part_opt%do_ice_shape_removal, run_part_opt%record_removals)
     end if
 #endif
 

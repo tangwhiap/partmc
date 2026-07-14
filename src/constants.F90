@@ -46,8 +46,8 @@ module pmc_constants
      real(kind=dp) :: water_eq_vap_press = 611d0
      !> Freezing point of water (K).
      real(kind=dp) :: water_freeze_temp = 273.15d0
-     !> Homogeneous freezing point of water (K).
-     real(kind=dp) :: water_homo_freeze_temp  = 240.15d0
+     !> Homogeneous freezing threshold of water (K).
+     real(kind=dp) :: water_homo_freeze_temp = 240.15d0
      !> Surface energy of water (J m^{-2}).
      real(kind=dp) :: water_surf_eng = 0.073d0
      !> Latent heat of water (J kg^{-1}).
@@ -69,7 +69,6 @@ module pmc_constants
      real(kind=dp) :: reference_ice_density = 920d0
      !> Immersion freezing water mass ratio threshold.
      real(kind=dp) :: imf_water_threshold = 1d-2
-     !real(kind=dp) :: imf_water_threshold = 0.5d0
      !> Homogeneous freezing water mass ratio threshold.
      real(kind=dp) :: homof_water_threshold = 1d-2
      !> NaN value.

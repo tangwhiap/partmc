@@ -1367,7 +1367,7 @@ contains
        particle_frozen(i_part) = aero_state%apa%particle(i_part)%frozen
     end do
 
-    aero_state_frozen_fraction = sum(pack(particle_num_concs, particle_frozen)) &
+    aero_state_frozen_fraction = sum(particle_num_concs, mask=particle_frozen) &
          / sum(particle_num_concs)
 
   end function aero_state_frozen_fraction
@@ -3004,8 +3004,8 @@ contains
             description="valid is 0 (invalid entry), 1 (removed due to " &
             // "dilution), 2 (removed due to coagulation -- combined " &
             // "particle ID is in \c aero_removed_other_id), 3 (removed " &
-            // "due to populating halving), 4 (removed due to weighting " &
-            // "changes), or 5 (removed due to extreme ice aspect ratio)")
+            // "due to populating halving), or 4 (removed due to " &
+            // "weighting changes")
        call pmc_nc_write_integer64_1d(ncid, aero_removed_other_id, &
             "aero_removed_other_id", (/ dimid_aero_removed /), &
             long_name="ID of other particle involved in removal", &
@@ -3073,10 +3073,10 @@ contains
   !!     - 2 (\c AERO_INFO_COAG): particle was removed due to coagulation
   !!     - 3 (\c AERO_INFO_HALVED): particle was removed due to halving of
   !!       the aerosol population
-  !!     - 4 (\c AERO_INFO_WEIGHT): particle was removed due to adjustments
-  !!       in the particle's weighting function
-  !!     - 5 (\c AERO_INFO_ICE_SHAPE): particle was removed due to extreme
-  !!       ice aspect ratio
+     !!     - 4 (\c AERO_INFO_WEIGHT): particle was removed due to adjustments
+     !!       in the particle's weighting function
+     !!     - 5 (\c AERO_INFO_ICE_SHAPE): particle was removed due to extreme
+     !!       ice aspect ratio
   !!   - \b aero_removed_other_id (dim \c aero_removed): the ID number of
   !!     the combined particle formed by coagulation, if the removal reason
   !!     was coagulation (2, \c AERO_INFO_COAG). May be 0, if the new
