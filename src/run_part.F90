@@ -23,6 +23,7 @@ module pmc_run_part
   use pmc_coag_kernel
   use pmc_nucleate
   use pmc_ice_nucleation
+  use pmc_ice_nucleation_data
   use pmc_mpi
   use pmc_camp_interface
   use pmc_photolysis
@@ -72,6 +73,10 @@ module pmc_run_part
      logical :: do_immersion_freezing
      !> The immersion freezing scheme options.
      integer :: immersion_freezing_scheme_type
+     !> Water-content criterion for immersion freezing.
+     integer :: immersion_freezing_water_criterion_type
+     !> Value for the selected immersion-freezing water criterion.
+     real(kind=dp) :: immersion_freezing_water_criterion_value
      !> Slope parameter for the INAS parameterization (singular scheme only).
      real(kind=dp) :: INAS_a
      !> Intercept parameter for the INAS parameterization (singular scheme only).
@@ -83,6 +88,12 @@ module pmc_run_part
      logical :: do_freezing_naive
      !> Whether to perform homogeneous freezing.
      logical :: do_homogeneous_freezing
+     !> Water-content criterion for homogeneous freezing.
+     integer :: homogeneous_freezing_water_criterion_type
+     !> Value for the selected homogeneous-freezing water criterion.
+     real(kind=dp) :: homogeneous_freezing_water_criterion_value
+     !> Ice-nucleating-species properties.
+     type(ice_nucleation_data_t) :: ins_data
      !> Whether to simulate ice-shape variation.
      logical :: do_ice_shape = .false.
      !> Whether to remove ice particles with extreme aspect ratio.
@@ -226,7 +237,12 @@ contains
             run_part_opt%output_type, aero_data, aero_state, gas_data, &
             gas_state, env_state, i_state, time, run_part_opt%del_t, &
             run_part_opt%i_repeat, run_part_opt%record_removals, &
-            run_part_opt%do_optical, run_part_opt%uuid)
+            run_part_opt%do_optical, run_part_opt%uuid, &
+            run_part_opt%immersion_freezing_water_criterion_type, &
+            run_part_opt%immersion_freezing_water_criterion_value, &
+            run_part_opt%homogeneous_freezing_water_criterion_type, &
+            run_part_opt%homogeneous_freezing_water_criterion_value, &
+            run_part_opt%ins_data)
        call aero_info_array_zero(aero_state%aero_info_array)
     end if
 
@@ -350,11 +366,20 @@ contains
          + pmc_mpi_pack_size_logical(val%do_nucleation) &
          + pmc_mpi_pack_size_logical(val%do_immersion_freezing) &
          + pmc_mpi_pack_size_integer(val%immersion_freezing_scheme_type) &
+         + pmc_mpi_pack_size_integer( &
+              val%immersion_freezing_water_criterion_type) &
+         + pmc_mpi_pack_size_real( &
+              val%immersion_freezing_water_criterion_value) &
          + pmc_mpi_pack_size_real(val%INAS_a) &
          + pmc_mpi_pack_size_real(val%INAS_b) &
          + pmc_mpi_pack_size_real(val%freezing_rate) &
          + pmc_mpi_pack_size_logical(val%do_freezing_naive) &
          + pmc_mpi_pack_size_logical(val%do_homogeneous_freezing) &
+         + pmc_mpi_pack_size_integer( &
+              val%homogeneous_freezing_water_criterion_type) &
+         + pmc_mpi_pack_size_real( &
+              val%homogeneous_freezing_water_criterion_value) &
+         + pmc_mpi_pack_size_ice_nucleation_data(val%ins_data) &
          + pmc_mpi_pack_size_logical(val%do_ice_shape) &
          + pmc_mpi_pack_size_logical(val%do_ice_shape_removal) &
          + pmc_mpi_pack_size_logical(val%do_ice_density) &
@@ -414,12 +439,21 @@ contains
     call pmc_mpi_pack_logical(buffer, position, val%do_immersion_freezing)
     call pmc_mpi_pack_integer(buffer, position, &
             val%immersion_freezing_scheme_type)
+    call pmc_mpi_pack_integer(buffer, position, &
+         val%immersion_freezing_water_criterion_type)
+    call pmc_mpi_pack_real(buffer, position, &
+         val%immersion_freezing_water_criterion_value)
 
     call pmc_mpi_pack_real(buffer, position, val%INAS_a)
     call pmc_mpi_pack_real(buffer, position, val%INAS_b)
     call pmc_mpi_pack_real(buffer, position, val%freezing_rate)
     call pmc_mpi_pack_logical(buffer, position, val%do_freezing_naive)
     call pmc_mpi_pack_logical(buffer, position, val%do_homogeneous_freezing)
+    call pmc_mpi_pack_integer(buffer, position, &
+         val%homogeneous_freezing_water_criterion_type)
+    call pmc_mpi_pack_real(buffer, position, &
+         val%homogeneous_freezing_water_criterion_value)
+    call pmc_mpi_pack_ice_nucleation_data(buffer, position, val%ins_data)
     call pmc_mpi_pack_logical(buffer, position, val%do_ice_shape)
     call pmc_mpi_pack_logical(buffer, position, val%do_ice_shape_removal)
     call pmc_mpi_pack_logical(buffer, position, val%do_ice_density)
@@ -481,11 +515,20 @@ contains
     call pmc_mpi_unpack_logical(buffer, position, val%do_nucleation)
     call pmc_mpi_unpack_logical(buffer, position, val%do_immersion_freezing)
     call pmc_mpi_unpack_integer(buffer, position, val%immersion_freezing_scheme_type)
+    call pmc_mpi_unpack_integer(buffer, position, &
+         val%immersion_freezing_water_criterion_type)
+    call pmc_mpi_unpack_real(buffer, position, &
+         val%immersion_freezing_water_criterion_value)
     call pmc_mpi_unpack_real(buffer, position, val%INAS_a)
     call pmc_mpi_unpack_real(buffer, position, val%INAS_b)
     call pmc_mpi_unpack_real(buffer, position, val%freezing_rate)
     call pmc_mpi_unpack_logical(buffer, position, val%do_freezing_naive)
     call pmc_mpi_unpack_logical(buffer, position, val%do_homogeneous_freezing)
+    call pmc_mpi_unpack_integer(buffer, position, &
+         val%homogeneous_freezing_water_criterion_type)
+    call pmc_mpi_unpack_real(buffer, position, &
+         val%homogeneous_freezing_water_criterion_value)
+    call pmc_mpi_unpack_ice_nucleation_data(buffer, position, val%ins_data)
     call pmc_mpi_unpack_logical(buffer, position, val%do_ice_shape)
     call pmc_mpi_unpack_logical(buffer, position, val%do_ice_shape_removal)
     call pmc_mpi_unpack_logical(buffer, position, val%do_ice_density)
@@ -745,6 +788,7 @@ contains
     end if
     call spec_file_read_logical(file, 'do_immersion_freezing', &
            run_part_opt%do_immersion_freezing)
+    call ice_nucleation_data_zero(run_part_opt%ins_data)
 
     if (run_part_opt%do_immersion_freezing) then
 
@@ -771,11 +815,50 @@ contains
           call spec_file_read_real(file, 'INAS_a', run_part_opt%INAS_a)
           call spec_file_read_real(file, 'INAS_b', run_part_opt%INAS_b)
        end if
-       
+
+       if ((run_part_opt%immersion_freezing_scheme_type .eq. &
+            IMMERSION_FREEZING_SCHEME_ABIFM) .or. &
+            (run_part_opt%immersion_freezing_scheme_type .eq. &
+            IMMERSION_FREEZING_SCHEME_SINGULAR)) then
+          call spec_file_read_string(file, 'ice_nucleation_data', sub_filename)
+          call spec_file_open(sub_filename, sub_file)
+          call spec_file_read_ice_nucleation_data(sub_file, aero_data, &
+               run_part_opt%ins_data)
+          call spec_file_close(sub_file)
+       end if
+
+       call spec_file_read_freezing_water_criterion(file, &
+            'immersion_freezing_water_criterion', &
+            'immersion_freezing_water_mass_fraction_threshold', &
+            'immersion_freezing_water_to_dry_volume_ratio_threshold', &
+            run_part_opt%immersion_freezing_water_criterion_type, &
+            run_part_opt%immersion_freezing_water_criterion_value)
+    else
+       run_part_opt%immersion_freezing_scheme_type = &
+            IMMERSION_FREEZING_SCHEME_INVALID
+       run_part_opt%immersion_freezing_water_criterion_type = &
+            FREEZING_WATER_CRITERION_INVALID
+       run_part_opt%immersion_freezing_water_criterion_value = const%nan
+       run_part_opt%freezing_rate = const%nan
+       run_part_opt%INAS_a = const%nan
+       run_part_opt%INAS_b = const%nan
+       run_part_opt%do_freezing_naive = .false.
     end if
 
     call spec_file_read_logical(file, 'do_homogeneous_freezing', &
          run_part_opt%do_homogeneous_freezing)
+    if (run_part_opt%do_homogeneous_freezing) then
+       call spec_file_read_freezing_water_criterion(file, &
+            'homogeneous_freezing_water_criterion', &
+            'homogeneous_freezing_water_mass_fraction_threshold', &
+            'homogeneous_freezing_water_to_dry_volume_ratio_threshold', &
+            run_part_opt%homogeneous_freezing_water_criterion_type, &
+            run_part_opt%homogeneous_freezing_water_criterion_value)
+    else
+       run_part_opt%homogeneous_freezing_water_criterion_type = &
+            FREEZING_WATER_CRITERION_INVALID
+       run_part_opt%homogeneous_freezing_water_criterion_value = const%nan
+    end if
     if ((run_part_opt%do_immersion_freezing .or. &
          run_part_opt%do_homogeneous_freezing) .and. &
          run_part_opt%do_condensation) then
@@ -797,7 +880,11 @@ contains
        call spec_file_read_logical(file, 'do_ice_ventilation', &
             run_part_opt%do_ice_ventilation)
     else
+       run_part_opt%do_ice_shape = .false.
        run_part_opt%do_ice_shape_removal = .false.
+       run_part_opt%do_ice_density = .false.
+       run_part_opt%ice_dep_density_scheme_type = 0
+       run_part_opt%do_ice_ventilation = .false.
     end if
 
     call spec_file_read_integer(file, 'rand_init', rand_init)
@@ -973,11 +1060,15 @@ contains
        call ice_nucleation_immersion_freezing(aero_state, aero_data, env_state, &
             run_part_opt%del_t, run_part_opt%immersion_freezing_scheme_type, &
             run_part_opt%freezing_rate, run_part_opt%do_freezing_naive, &
-            run_part_opt%INAS_a, run_part_opt%INAS_b)
+            run_part_opt%INAS_a, run_part_opt%INAS_b, run_part_opt%ins_data, &
+            run_part_opt%immersion_freezing_water_criterion_type, &
+            run_part_opt%immersion_freezing_water_criterion_value)
     end if
     if (run_part_opt%do_homogeneous_freezing) then
        call ice_nucleation_homogeneous_freezing(aero_state, aero_data, &
-            env_state, run_part_opt%del_t)
+            env_state, run_part_opt%del_t, &
+            run_part_opt%homogeneous_freezing_water_criterion_type, &
+            run_part_opt%homogeneous_freezing_water_criterion_value)
     end if
     if (run_part_opt%do_immersion_freezing .or. &
          run_part_opt%do_homogeneous_freezing) then
@@ -1066,7 +1157,12 @@ contains
                run_part_opt%output_type, aero_data, aero_state, gas_data, &
                gas_state, env_state, i_output, time, run_part_opt%del_t, &
                run_part_opt%i_repeat, run_part_opt%record_removals, &
-               run_part_opt%do_optical, run_part_opt%uuid)
+               run_part_opt%do_optical, run_part_opt%uuid, &
+               run_part_opt%immersion_freezing_water_criterion_type, &
+               run_part_opt%immersion_freezing_water_criterion_value, &
+               run_part_opt%homogeneous_freezing_water_criterion_type, &
+               run_part_opt%homogeneous_freezing_water_criterion_value, &
+               run_part_opt%ins_data)
           call aero_info_array_zero(aero_state%aero_info_array)
        end if
     end if

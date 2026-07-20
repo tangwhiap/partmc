@@ -46,6 +46,9 @@ do_immersion_freezing yes                 # whether to do freezing (yes/no)
 immersion_freezing_scheme singular
 INAS_a -0.517
 INAS_b 8.934
+ice_nucleation_data INS.dat
+immersion_freezing_water_criterion water_mass_threshold
+immersion_freezing_water_mass_fraction_threshold 0.01
 do_homogeneous_freezing no      # whether to do homogeneous freezing (yes/no)
 
 rand_init 0                     # random initialization (0 to auto-generate)

@@ -13,6 +13,7 @@ module pmc_ice_nucleation
   use pmc_aero_particle
   use pmc_constants
   use pmc_rand
+  use pmc_ice_nucleation_data
 
   implicit none
 
@@ -26,6 +27,13 @@ module pmc_ice_nucleation
   !> Type code for the ABIFM immersion freezing scheme.
   integer, parameter :: IMMERSION_FREEZING_SCHEME_ABIFM = 3
 
+  !> Type code for an undefined or invalid particle-water criterion.
+  integer, parameter :: FREEZING_WATER_CRITERION_INVALID = 0
+  !> Require a minimum water mass fraction.
+  integer, parameter :: FREEZING_WATER_CRITERION_MASS = 1
+  !> Require a minimum water-to-dry-particle volume ratio.
+  integer, parameter :: FREEZING_WATER_CRITERION_VOLUME_RATIO = 2
+
 contains
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -33,7 +41,8 @@ contains
   !> Main subroutine for immersion freezing simulation.
   subroutine ice_nucleation_immersion_freezing(aero_state, aero_data, &
        env_state, del_t, immersion_freezing_scheme_type, &
-       freezing_rate, do_freezing_naive, INAS_a, INAS_b)
+       freezing_rate, do_freezing_naive, INAS_a, INAS_b, ins_data, &
+       water_criterion_type, water_criterion_value)
 
     !> Aerosol state.
     type(aero_state_t), intent(inout) :: aero_state
@@ -54,6 +63,12 @@ contains
     real(kind=dp), intent(in) :: INAS_a
     !> Intercept parameter for the INAS parameterization (singular scheme only).
     real(kind=dp), intent(in) :: INAS_b
+    !> Species- and scheme-specific ice nucleation data.
+    type(ice_nucleation_data_t), intent(in) :: ins_data
+    !> Particle-water criterion used by immersion freezing.
+    integer, intent(in) :: water_criterion_type
+    !> Threshold associated with the particle-water criterion.
+    real(kind=dp), intent(in) :: water_criterion_value
 
     ! Call the immersion freezing subroutine according to the immersion
     ! freezing scheme.
@@ -64,18 +79,21 @@ contains
           if (do_freezing_naive) then
              call ice_nucleation_immersion_freezing_time_dependent_naive( &
                   aero_state, aero_data, env_state, del_t, &
-                  immersion_freezing_scheme_type, freezing_rate)
+                  immersion_freezing_scheme_type, freezing_rate, ins_data, &
+                  water_criterion_type, water_criterion_value)
           else
              call ice_nucleation_immersion_freezing_time_dependent( &
                   aero_state, aero_data, env_state, del_t, &
-                  immersion_freezing_scheme_type, freezing_rate)
+                  immersion_freezing_scheme_type, freezing_rate, ins_data, &
+                  water_criterion_type, water_criterion_value)
           end if
        else if (immersion_freezing_scheme_type == &
             IMMERSION_FREEZING_SCHEME_SINGULAR) then
           call ice_nucleation_singular_initialize(aero_state, aero_data, &
                INAS_a, INAS_b)
           call ice_nucleation_immersion_freezing_singular(aero_state, &
-               aero_data, env_state)
+               aero_data, env_state, water_criterion_type, &
+               water_criterion_value)
        else
           call assert_msg(121370299, .false., &
                'Invalid immersion freezing scheme type')
@@ -88,16 +106,19 @@ contains
 
   !> Main subroutine for homogeneous freezing simulation.
   subroutine ice_nucleation_homogeneous_freezing(aero_state, aero_data, &
-       env_state, del_t)
+       env_state, del_t, water_criterion_type, water_criterion_value)
 
     type(aero_state_t), intent(inout) :: aero_state
     type(aero_data_t), intent(in) :: aero_data
     type(env_state_t), intent(inout) :: env_state
     real(kind=dp), intent(in) :: del_t
+    integer, intent(in) :: water_criterion_type
+    real(kind=dp), intent(in) :: water_criterion_value
 
     if (env_state%temp <= const%water_homo_freeze_temp) then
        call ice_nucleation_homogeneous_freezing_time_dependent_naive( &
-            aero_state, aero_data, env_state, del_t)
+            aero_state, aero_data, env_state, del_t, water_criterion_type, &
+            water_criterion_value)
     end if
 
   end subroutine ice_nucleation_homogeneous_freezing
@@ -142,7 +163,7 @@ contains
   !> Simulation for singular scheme, deciding whether to freeze for each
   !> particle. Run in each time step.
   subroutine ice_nucleation_immersion_freezing_singular(aero_state, &
-       aero_data, env_state)
+       aero_data, env_state, water_criterion_type, water_criterion_value)
 
     !> Aerosol state.
     type(aero_state_t), intent(inout) :: aero_state
@@ -150,27 +171,17 @@ contains
     type(aero_data_t), intent(in) :: aero_data
     !> Environment state.
     type(env_state_t), intent(inout) :: env_state
-
-    real(kind=dp), allocatable :: H2O_masses(:), total_masses(:), &
-        H2O_frac(:)
+    integer, intent(in) :: water_criterion_type
+    real(kind=dp), intent(in) :: water_criterion_value
     integer :: i_part
 
-    ! Workaround: explicit allocate required before assignment to suppress
-    ! false-positive -Wuninitialized warnings from GCC
-    allocate(total_masses(aero_state_n_part(aero_state)))
-    allocate(H2O_masses(aero_state_n_part(aero_state)))
-    allocate(H2O_frac(aero_state_n_part(aero_state)))
-
-    total_masses = aero_state_masses(aero_state, aero_data)
-    H2O_masses = aero_state_masses(aero_state, aero_data, include=["H2O"])
-    H2O_frac = H2O_masses / total_masses
     do i_part = 1,aero_state_n_part(aero_state)
        if (aero_state%apa%particle(i_part)%frozen) then
           cycle
        end if
-       if (H2O_frac(i_part) < const%imf_water_threshold) then
-          cycle
-       end if
+       if (.not. freezing_water_criteria( &
+            aero_state%apa%particle(i_part), aero_data, &
+            water_criterion_type, water_criterion_value)) cycle
        if (env_state%temp <= &
             aero_state%apa%particle(i_part)%imf_temperature) then
           aero_state%apa%particle(i_part)%frozen = .true.
@@ -189,7 +200,8 @@ contains
   !> This subroutine applies the binned-tau leaping algorithm for speeding up.
   subroutine ice_nucleation_immersion_freezing_time_dependent(aero_state, &
        aero_data, env_state, del_t, immersion_freezing_scheme_type, &
-       freezing_rate)
+       freezing_rate, ins_data, water_criterion_type, &
+       water_criterion_value)
 
     !> Aerosol state.
     type(aero_state_t), intent(inout) :: aero_state
@@ -203,6 +215,9 @@ contains
     real(kind=dp), intent(in) :: freezing_rate
     !> Immersion freezing scheme type.
     integer, intent(in) :: immersion_freezing_scheme_type
+    type(ice_nucleation_data_t), intent(in) :: ins_data
+    integer, intent(in) :: water_criterion_type
+    real(kind=dp), intent(in) :: water_criterion_value
 
     integer :: i_part, i_bin, i_class, n_bins, n_class
     real(kind=dp) :: a_w_ice, pis, pvs
@@ -212,28 +227,16 @@ contains
 
     integer :: k_th, n_parts_in_bin
     real(kind=dp) :: rand
-    real(kind=dp), allocatable :: H2O_masses(:), total_masses(:), &
-         H2O_frac(:)
-    integer :: i_spec_max
     real(kind=dp) :: j_het_max
     integer :: rand_geo
 
-    ! Workaround: explicit allocate required before assignment to suppress
-    ! false-positive -Wuninitialized warnings from GCC
-    allocate(total_masses(aero_state_n_part(aero_state)))
-    allocate(H2O_masses(aero_state_n_part(aero_state)))
-    allocate(H2O_frac(aero_state_n_part(aero_state)))
-
     call aero_state_sort(aero_state, aero_data)
-
-    total_masses = aero_state_masses(aero_state, aero_data)
-    H2O_masses = aero_state_masses(aero_state, aero_data, include=["H2O"])
-    H2O_frac = H2O_masses / total_masses
     pvs = env_state_saturated_vapor_pressure_wrt_water(env_state%temp)
     pis = env_state_saturated_vapor_pressure_wrt_ice(env_state%temp)
     a_w_ice = pis / pvs
     if (immersion_freezing_scheme_type == IMMERSION_FREEZING_SCHEME_ABIFM) then
-       call ABIFM_max_spec(aero_data, a_w_ice, i_spec_max, j_het_max)
+       j_het_max = ice_nucleation_data_max_abifm_rate(ins_data, a_w_ice)
+       if (j_het_max <= 0d0) return
     end if
 
     n_bins = aero_sorted_n_bin(aero_state%aero_sorted)
@@ -253,9 +256,10 @@ contains
           diameter_max = radius_max * 2
           if (immersion_freezing_scheme_type == &
                IMMERSION_FREEZING_SCHEME_ABIFM) then
-             p_freeze_max = ABIFM_Pfrz_max(diameter_max, aero_data, &
-                   j_het_max, del_t)
+             p_freeze_max = ABIFM_Pfrz_max(diameter_max, j_het_max, del_t)
           end if
+
+          if (p_freeze_max <= 0d0) cycle loop_classes
 
           k_th = n_parts_in_bin + 1
           loop_chosen_particles: do while(.true.)
@@ -269,13 +273,14 @@ contains
              if (aero_state%apa%particle(i_part)%frozen) then
                 cycle
              end if
-             if (H2O_frac(i_part) < const%imf_water_threshold) then
-                cycle
-             end if
+             if (.not. freezing_water_criteria( &
+                  aero_state%apa%particle(i_part), aero_data, &
+                  water_criterion_type, water_criterion_value)) cycle
              if (immersion_freezing_scheme_type == &
                   IMMERSION_FREEZING_SCHEME_ABIFM) then
                 p_freeze = ABIFM_Pfrz_particle( &
-                     aero_state%apa%particle(i_part), aero_data, a_w_ice, del_t)
+                     aero_state%apa%particle(i_part), aero_data, ins_data, &
+                     a_w_ice, del_t)
                 call warn_assert_msg(301184565, p_freeze <= p_freeze_max,&
                      "p_freeze > p_freeze_max.")
                 rand = pmc_random()
@@ -306,7 +311,8 @@ contains
   !> This subroutine applies the naive algorithm that checks each particle.
   subroutine ice_nucleation_immersion_freezing_time_dependent_naive( &
        aero_state, aero_data, env_state, del_t, &
-       immersion_freezing_scheme_type, freezing_rate)
+       immersion_freezing_scheme_type, freezing_rate, ins_data, &
+       water_criterion_type, water_criterion_value)
 
     !> Aerosol state.
     type(aero_state_t), intent(inout) :: aero_state
@@ -320,23 +326,14 @@ contains
     integer, intent(in) :: immersion_freezing_scheme_type
     !> Freezing rate (only used for the constant rate scheme).
     real(kind=dp), intent(in) :: freezing_rate
+    type(ice_nucleation_data_t), intent(in) :: ins_data
+    integer, intent(in) :: water_criterion_type
+    real(kind=dp), intent(in) :: water_criterion_value
 
     integer :: i_part
     real(kind=dp) :: a_w_ice, pis, pvs
     real(kind=dp) :: p_freeze
-    real(kind=dp), allocatable :: H2O_masses(:), total_masses(:), &
-         H2O_frac(:)
     real(kind=dp) :: rand
-
-    ! Workaround: explicit allocate required before assignment to suppress
-    ! false-positive -Wuninitialized warnings from GCC
-    allocate(total_masses(aero_state_n_part(aero_state)))
-    allocate(H2O_masses(aero_state_n_part(aero_state)))
-    allocate(H2O_frac(aero_state_n_part(aero_state)))
-
-    total_masses = aero_state_masses(aero_state, aero_data)
-    H2O_masses = aero_state_masses(aero_state, aero_data, include=["H2O"])
-    H2O_frac = H2O_masses / total_masses
 
     pvs = env_state_saturated_vapor_pressure_wrt_water(env_state%temp)
     pis = env_state_saturated_vapor_pressure_wrt_ice(env_state%temp)
@@ -350,15 +347,18 @@ contains
 
     do i_part = 1,aero_state_n_part(aero_state)
        if (aero_state%apa%particle(i_part)%frozen) cycle
-       if (H2O_frac(i_part) < const%imf_water_threshold) cycle
-       rand = pmc_random()
+       if (.not. freezing_water_criteria( &
+            aero_state%apa%particle(i_part), aero_data, &
+            water_criterion_type, water_criterion_value)) cycle
 
        if (immersion_freezing_scheme_type == &
             IMMERSION_FREEZING_SCHEME_ABIFM) then
           p_freeze = ABIFM_Pfrz_particle(aero_state%apa%particle(i_part), &
-               aero_data, a_w_ice, del_t)
+               aero_data, ins_data, a_w_ice, del_t)
        end if
 
+       if (p_freeze <= 0d0) cycle
+       rand = pmc_random()
        if (rand < p_freeze) then
           aero_state%apa%particle(i_part)%frozen = .true.
           aero_state%apa%particle(i_part)%den_ice = &
@@ -373,12 +373,15 @@ contains
 
   !> Simulates homogeneous freezing with the Koop et al. (2000) rate.
   subroutine ice_nucleation_homogeneous_freezing_time_dependent_naive( &
-       aero_state, aero_data, env_state, del_t)
+       aero_state, aero_data, env_state, del_t, water_criterion_type, &
+       water_criterion_value)
 
     type(aero_state_t), intent(inout) :: aero_state
     type(aero_data_t), intent(in) :: aero_data
     type(env_state_t), intent(inout) :: env_state
     real(kind=dp), intent(in) :: del_t
+    integer, intent(in) :: water_criterion_type
+    real(kind=dp), intent(in) :: water_criterion_value
 
     integer :: i_part
     real(kind=dp) :: a_w_ice, pis, pvs, p_freeze, rand
@@ -389,11 +392,13 @@ contains
 
     do i_part = 1,aero_state_n_part(aero_state)
        if (aero_state%apa%particle(i_part)%frozen) cycle
-       if (.not. immersion_freezing_water_criteria( &
-            aero_state%apa%particle(i_part), aero_data)) cycle
-       rand = pmc_random()
+       if (.not. freezing_water_criteria( &
+            aero_state%apa%particle(i_part), aero_data, &
+            water_criterion_type, water_criterion_value)) cycle
        p_freeze = Homo_Koop_Pfrz_particle( &
             aero_state%apa%particle(i_part), aero_data, a_w_ice, del_t)
+       if (p_freeze <= 0d0) cycle
+       rand = pmc_random()
        if (rand < p_freeze) then
           aero_state%apa%particle(i_part)%frozen = .true.
           aero_state%apa%particle(i_part)%den_ice = &
@@ -455,60 +460,90 @@ contains
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-  !> Whether the water content meets the IceGrowth immersion criterion.
-  logical function immersion_freezing_water_criteria(aero_particle, aero_data)
+  !> Whether a particle meets a configured freezing water-content criterion.
+  logical function freezing_water_criteria(aero_particle, aero_data, &
+       criterion_type, criterion_value)
 
     type(aero_particle_t), intent(in) :: aero_particle
     type(aero_data_t), intent(in) :: aero_data
+    integer, intent(in) :: criterion_type
+    real(kind=dp), intent(in) :: criterion_value
 
-    real(kind=dp) :: volume, dry_volume, water_volume
-    real(kind=dp), parameter :: alpha_cw = 70d0
+    real(kind=dp) :: total_mass, water_mass
+    real(kind=dp) :: wet_volume, dry_volume, water_volume
 
-    volume = aero_particle_volume(aero_particle)
-    dry_volume = aero_particle_dry_volume(aero_particle, aero_data)
-    water_volume = volume - dry_volume
-    immersion_freezing_water_criteria = water_volume >= alpha_cw * dry_volume
+    select case (criterion_type)
+    case (FREEZING_WATER_CRITERION_MASS)
+       total_mass = sum(aero_particle%vol * aero_data%density)
+       water_mass = aero_particle%vol(aero_data%i_water) * &
+            aero_data%density(aero_data%i_water)
+       if (total_mass > 0d0) then
+          freezing_water_criteria = &
+               water_mass / total_mass >= criterion_value
+       else
+          freezing_water_criteria = .false.
+       end if
+    case (FREEZING_WATER_CRITERION_VOLUME_RATIO)
+       wet_volume = aero_particle_volume(aero_particle)
+       dry_volume = aero_particle_dry_volume(aero_particle, aero_data)
+       water_volume = max(0d0, wet_volume - dry_volume)
+       freezing_water_criteria = water_volume >= criterion_value * dry_volume
+    case default
+       call assert_msg(496442384, .false., &
+            'invalid freezing water criterion type')
+       freezing_water_criteria = .false.
+    end select
 
-  end function immersion_freezing_water_criteria
+  end function freezing_water_criteria
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
   !> Calculating the freezing probability for the particle (i_part) using ABIFM
   !> method (Knopf et al.,2013)
   real(kind=dp) function ABIFM_Pfrz_particle(aero_particle, aero_data, &
-       a_w_ice, del_t)
+       ins_data, a_w_ice, del_t)
 
     !> Aerosol particle.
     type(aero_particle_t), intent(in) :: aero_particle
     !> Aerosol data.
     type(aero_data_t), intent(in) :: aero_data
+    !> Species- and scheme-specific ice nucleation data.
+    type(ice_nucleation_data_t), intent(in) :: ins_data
     !> The water activity w.r.t. ice.
     real(kind=dp), intent(in) :: a_w_ice
     !> Time interval.
     real(kind=dp), intent(in) :: del_t
 
-    real(kind=dp) :: aerosol_diameter
-    real(kind=dp) :: immersed_surface_area
-    real(kind=dp) :: total_vol
-    real(kind=dp) :: surface_ratio
+    real(kind=dp) :: core_volume, core_surface_area, species_surface_area
     real(kind=dp) :: abifm_m, abifm_c
     real(kind=dp) :: j_het, j_het_x_area
-    integer :: i_spec
+    integer :: i_entry, i_spec
 
-    aerosol_diameter = aero_particle_dry_diameter(aero_particle, aero_data)
-    immersed_surface_area = const%pi * aerosol_diameter**2
-
-    total_vol = aero_particle_dry_volume(aero_particle, aero_data)
-
-    j_het_x_area = 0d0
+    core_volume = 0d0
     do i_spec = 1,aero_data_n_spec(aero_data)
        if (i_spec == aero_data%i_water) cycle
-       abifm_m = aero_data%abifm_m(i_spec)
-       abifm_c = aero_data%abifm_c(i_spec)
+       if (aero_data%is_soluble(i_spec) == 0) then
+          core_volume = core_volume + aero_particle%vol(i_spec)
+       end if
+    end do
+
+    if (core_volume <= 0d0) then
+       ABIFM_Pfrz_particle = 0d0
+       return
+    end if
+    core_surface_area = (36d0 * const%pi * core_volume**2)**(1d0 / 3d0)
+
+    j_het_x_area = 0d0
+    do i_entry = 1,ins_data%n_entry
+       if (ins_data%scheme_type(i_entry) /= INS_SCHEME_ABIFM) cycle
+       i_spec = ins_data%aero_spec(i_entry)
+       if (aero_particle%vol(i_spec) <= 0d0) cycle
+       abifm_m = ins_data%parameter(1, i_entry)
+       abifm_c = ins_data%parameter(2, i_entry)
        j_het = 10d0**(abifm_m * (1d0 - a_w_ice) + abifm_c) * 10000d0
-       surface_ratio = aero_particle%vol(i_spec) / total_vol
-       j_het_x_area = j_het_x_area + j_het * immersed_surface_area * &
-            surface_ratio
+       species_surface_area = core_surface_area * &
+            aero_particle%vol(i_spec) / core_volume
+       j_het_x_area = j_het_x_area + j_het * species_surface_area
     end do
 
     ABIFM_Pfrz_particle = 1d0 - exp(-j_het_x_area * del_t)
@@ -517,46 +552,12 @@ contains
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-  !> Finding the maximum heterogeneous ice nucleation rate coefficient.
-  subroutine ABIFM_max_spec(aero_data, a_w_ice, i_spec_max, j_het_max)
-
-    !> Aerosol data.
-    type(aero_data_t), intent(in) :: aero_data
-    !> The water activity w.r.t. ice.
-    real(kind=dp), intent(in) :: a_w_ice
-    !> The index of the maximum J_het species.
-    integer, intent(out) :: i_spec_max
-    !> The maximum value of J_het among all species.
-    real(kind=dp), intent(out) :: j_het_max
-
-    real(kind=dp) :: abifm_m, abifm_c
-    real(kind=dp) :: j_het
-    integer :: i_spec
-
-    j_het_max = const%nan
-    do i_spec = 1,aero_data_n_spec(aero_data)
-       if (i_spec == aero_data%i_water) cycle
-       abifm_m = aero_data%abifm_m(i_spec)
-       abifm_c = aero_data%abifm_c(i_spec)
-       j_het = 10d0**(abifm_m * (1d0 - a_w_ice) + abifm_c) * 10000d0
-       if (j_het > j_het_max) then
-          j_het_max = j_het
-          i_spec_max = i_spec
-       end if
-    end do
-
-  end subroutine ABIFM_max_spec
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
   !> Calculating the maximum freezing probability for particles in
   !> one bin using ABIFM method (Knopf et al.,2013). Only used by
   !> the binned-tau leaping algorithm.
-  real(kind=dp) function ABIFM_Pfrz_max(diameter_max, aero_data, j_het_max, &
+  real(kind=dp) function ABIFM_Pfrz_max(diameter_max, j_het_max, &
        del_t)
 
-    !> Aerosol data.
-    type(aero_data_t), intent(in) :: aero_data
     !> Maximum diameter.
     real(kind=dp), intent(in) :: diameter_max
     !> Time interval.
@@ -616,6 +617,45 @@ contains
     end if
 
   end subroutine spec_file_read_immersion_freezing_scheme_type
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+  !> Read and validate a particle-water criterion and its threshold.
+  subroutine spec_file_read_freezing_water_criterion(file, criterion_name, &
+       mass_threshold_name, volume_threshold_name, criterion_type, &
+       criterion_value)
+
+    type(spec_file_t), intent(inout) :: file
+    character(len=*), intent(in) :: criterion_name
+    character(len=*), intent(in) :: mass_threshold_name
+    character(len=*), intent(in) :: volume_threshold_name
+    integer, intent(out) :: criterion_type
+    real(kind=dp), intent(out) :: criterion_value
+
+    character(len=SPEC_LINE_MAX_VAR_LEN) :: criterion
+
+    call spec_file_read_string(file, criterion_name, criterion)
+    select case (trim(criterion))
+    case ('water_mass_threshold')
+       criterion_type = FREEZING_WATER_CRITERION_MASS
+       call spec_file_read_real(file, mass_threshold_name, criterion_value)
+       if (criterion_value < 0d0 .or. criterion_value > 1d0) then
+          call spec_file_die_msg(815744920, file, trim(mass_threshold_name) // &
+               ' must be between 0 and 1')
+       end if
+    case ('water_volume_ratio_threshold')
+       criterion_type = FREEZING_WATER_CRITERION_VOLUME_RATIO
+       call spec_file_read_real(file, volume_threshold_name, criterion_value)
+       if (criterion_value < 0d0) then
+          call spec_file_die_msg(650300792, file, &
+               trim(volume_threshold_name) // ' must be non-negative')
+       end if
+    case default
+       call spec_file_die_msg(177143483, file, &
+            'unknown freezing water criterion: ' // trim(criterion))
+    end select
+
+  end subroutine spec_file_read_freezing_water_criterion
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 

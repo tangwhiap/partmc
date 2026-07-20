@@ -77,6 +77,7 @@ module pmc_output
   use pmc_util
   use pmc_gas_data
   use pmc_mpi
+  use pmc_ice_nucleation_data
 #ifdef PMC_USE_MPI
   use mpi
 #endif
@@ -108,7 +109,10 @@ contains
   !> Write the current state.
   subroutine output_state(prefix, output_type, aero_data, aero_state, &
        gas_data, gas_state, env_state, index, time, del_t, i_repeat, &
-       record_removals, record_optical, uuid)
+       record_removals, record_optical, uuid, &
+       immersion_water_criterion_type, immersion_water_criterion_value, &
+       homogeneous_water_criterion_type, homogeneous_water_criterion_value, &
+       ins_data)
 
     !> Prefix of state file.
     character(len=*), intent(in) :: prefix
@@ -138,6 +142,11 @@ contains
     logical, intent(in) :: record_optical
     !> UUID of the simulation.
     character(len=PMC_UUID_LEN), intent(in) :: uuid
+    integer, intent(in), optional :: immersion_water_criterion_type
+    real(kind=dp), intent(in), optional :: immersion_water_criterion_value
+    integer, intent(in), optional :: homogeneous_water_criterion_type
+    real(kind=dp), intent(in), optional :: homogeneous_water_criterion_value
+    type(ice_nucleation_data_t), intent(in), optional :: ins_data
 
     integer :: rank, n_proc
 #ifdef PMC_USE_MPI
@@ -156,12 +165,20 @@ contains
        if (rank == 0) then
           call output_state_to_file(prefix, aero_data, aero_state, gas_data, &
                gas_state, env_state, index, time, del_t, i_repeat, &
-               record_removals, record_optical, uuid, rank, n_proc)
+               record_removals, record_optical, uuid, rank, n_proc, &
+               immersion_water_criterion_type, &
+               immersion_water_criterion_value, &
+               homogeneous_water_criterion_type, &
+               homogeneous_water_criterion_value, ins_data)
 #ifdef PMC_USE_MPI
           do i_proc = 1,(n_proc - 1)
              call recv_output_state_central(prefix, aero_data, gas_data, &
                   index, time, del_t, i_repeat, record_removals, &
-                  record_optical, uuid, i_proc)
+                  record_optical, uuid, i_proc, &
+                  immersion_water_criterion_type, &
+                  immersion_water_criterion_value, &
+                  homogeneous_water_criterion_type, &
+                  homogeneous_water_criterion_value, ins_data)
           end do
 #endif
        else ! rank /= 0
@@ -171,12 +188,19 @@ contains
        ! have each process write its own data directly
        call output_state_to_file(prefix, aero_data, aero_state, gas_data, &
             gas_state, env_state, index, time, del_t, i_repeat, &
-            record_removals, record_optical, uuid, rank, n_proc)
+            record_removals, record_optical, uuid, rank, n_proc, &
+            immersion_water_criterion_type, immersion_water_criterion_value, &
+            homogeneous_water_criterion_type, homogeneous_water_criterion_value, &
+            ins_data)
     elseif (output_type == OUTPUT_TYPE_SINGLE) then
        if (n_proc == 1) then
           call output_state_to_file(prefix, aero_data, aero_state, gas_data, &
                gas_state, env_state, index, time, del_t, i_repeat, &
-               record_removals, record_optical, uuid, rank, n_proc)
+               record_removals, record_optical, uuid, rank, n_proc, &
+               immersion_water_criterion_type, &
+               immersion_water_criterion_value, &
+               homogeneous_water_criterion_type, &
+               homogeneous_water_criterion_value, ins_data)
        else
 #ifdef PMC_USE_MPI
           ! collect all data onto process 0 and then write it to a
@@ -190,7 +214,10 @@ contains
              call output_state_to_file(prefix, aero_data, aero_state_write, &
                   gas_data, gas_state_write, env_state_write, index, time, &
                   del_t, i_repeat, record_removals, record_optical, uuid, &
-                  rank, 1)
+                  rank, 1, immersion_water_criterion_type, &
+                  immersion_water_criterion_value, &
+                  homogeneous_water_criterion_type, &
+                  homogeneous_water_criterion_value, ins_data)
           end if
 #endif
        end if
@@ -277,7 +304,10 @@ contains
   !> subroutine directly, but rather call output_state().
   subroutine output_state_to_file(prefix, aero_data, aero_state, gas_data, &
        gas_state, env_state, index, time, del_t, i_repeat, record_removals, &
-       record_optical, uuid, write_rank, write_n_proc)
+       record_optical, uuid, write_rank, write_n_proc, &
+       immersion_water_criterion_type, immersion_water_criterion_value, &
+       homogeneous_water_criterion_type, homogeneous_water_criterion_value, &
+       ins_data)
 
     !> Prefix of state file.
     character(len=*), intent(in) :: prefix
@@ -309,6 +339,11 @@ contains
     integer, intent(in), optional :: write_rank
     !> Number of processes to write into file.
     integer, intent(in), optional :: write_n_proc
+    integer, intent(in), optional :: immersion_water_criterion_type
+    real(kind=dp), intent(in), optional :: immersion_water_criterion_value
+    integer, intent(in), optional :: homogeneous_water_criterion_type
+    real(kind=dp), intent(in), optional :: homogeneous_water_criterion_value
+    type(ice_nucleation_data_t), intent(in), optional :: ins_data
 
     character(len=len(prefix)+100) :: filename
     integer :: ncid
@@ -373,6 +408,21 @@ contains
     call gas_data_output_netcdf(gas_data, ncid)
     call gas_state_output_netcdf(gas_state, ncid, gas_data)
     call aero_data_output_netcdf(aero_data, ncid)
+    if (present(immersion_water_criterion_type)) then
+       call pmc_nc_write_integer(ncid, immersion_water_criterion_type, &
+            "immersion_freezing_water_criterion_type", &
+            description="particle-water criterion used by immersion freezing")
+       call pmc_nc_write_real(ncid, immersion_water_criterion_value, &
+            "immersion_freezing_water_criterion_value", unit="1", &
+            description="threshold for the immersion-freezing water criterion")
+       call pmc_nc_write_integer(ncid, homogeneous_water_criterion_type, &
+            "homogeneous_freezing_water_criterion_type", &
+            description="particle-water criterion used by homogeneous freezing")
+       call pmc_nc_write_real(ncid, homogeneous_water_criterion_value, &
+            "homogeneous_freezing_water_criterion_value", unit="1", &
+            description="threshold for the homogeneous-freezing water criterion")
+    end if
+    if (present(ins_data)) call ice_nucleation_data_output_netcdf(ins_data, ncid)
     call aero_state_output_netcdf(aero_state, ncid, aero_data, &
          record_removals, record_optical)
 
@@ -426,7 +476,9 @@ contains
   !> process.
   subroutine recv_output_state_central(prefix, aero_data, gas_data, index, &
        time, del_t, i_repeat, record_removals, record_optical, uuid, &
-       remote_proc)
+       remote_proc, immersion_water_criterion_type, &
+       immersion_water_criterion_value, homogeneous_water_criterion_type, &
+       homogeneous_water_criterion_value, ins_data)
 
     !> Prefix of state file.
     character(len=*), intent(in) :: prefix
@@ -450,6 +502,11 @@ contains
     character(len=PMC_UUID_LEN), intent(in) :: uuid
     !> Process number to receive from.
     integer, intent(in) :: remote_proc
+    integer, intent(in), optional :: immersion_water_criterion_type
+    real(kind=dp), intent(in), optional :: immersion_water_criterion_value
+    integer, intent(in), optional :: homogeneous_water_criterion_type
+    real(kind=dp), intent(in), optional :: homogeneous_water_criterion_value
+    type(ice_nucleation_data_t), intent(in), optional :: ins_data
 
 #ifdef PMC_USE_MPI
     type(env_state_t) :: env_state
@@ -485,7 +542,10 @@ contains
 
     call output_state_to_file(prefix, aero_data, aero_state, gas_data, &
          gas_state, env_state, index, time, del_t, i_repeat, &
-         record_removals, record_optical, uuid, remote_proc, n_proc)
+         record_removals, record_optical, uuid, remote_proc, n_proc, &
+         immersion_water_criterion_type, immersion_water_criterion_value, &
+         homogeneous_water_criterion_type, homogeneous_water_criterion_value, &
+         ins_data)
 #endif
 
   end subroutine recv_output_state_central

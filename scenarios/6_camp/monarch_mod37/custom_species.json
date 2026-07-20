@@ -29,8 +29,7 @@
       "density [kg m-3]" : 2650.0,
       "num_ions" : 0,
       "kappa" : 0.1,
-      "abifm_m": 0,
-      "abifm_c": 0
+      "is_soluble": 1
     },
     {
       "monarch name" : "lumped low-density dust species",
@@ -42,8 +41,7 @@
       "density [kg m-3]" : 2650.0,
       "num_ions" : 0,
       "kappa" : 0.1,
-      "abifm_m": 0,
-      "abifm_c": 0
+      "is_soluble": 1
     },
     {
       "monarch name" : "lumped sea salt species",
@@ -55,8 +53,7 @@
       "density [kg m-3]" : 2160.0,
       "num_ions" : 0,
       "kappa" : 0.53,
-      "abifm_m": 0,
-      "abifm_c": 0
+      "is_soluble": 1
     },
     {
       "name" : "BC_phob",
@@ -68,8 +65,7 @@
       "description" : "hydrophobic black carbon",
       "num_ions" : 0,
       "kappa" : 0,
-      "abifm_m": 0,
-      "abifm_c": 0
+      "is_soluble": 1
     },
     {
       "name" : "BC_phil",
@@ -81,8 +77,7 @@
       "description" : "hydrophilic black carbon",
       "num_ions" : 0,
       "kappa" : 0.001,
-      "abifm_m": 0,
-      "abifm_c": 0
+      "is_soluble": 1
     },
     {
       "name" : "other_PM",
@@ -94,8 +89,7 @@
       "description" : "unspecified particulate matter FIXME",
       "num_ions" : 0,
       "kappa" : 0,
-      "abifm_m": 0,
-      "abifm_c": 0
+      "is_soluble": 1
     },
     {
       "name" : "other_other_PM",
@@ -107,8 +101,7 @@
       "description" : "second unspecified particulate matter species FIXME",
       "num_ions" : 0,
       "kappa" : 0,
-      "abifm_m": 0,
-      "abifm_c": 0
+      "is_soluble": 1
     }
   ]
 }
